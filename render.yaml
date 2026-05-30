@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: hydra-trade
+    runtime: node
+    plan: starter
+    branch: main
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: NODE_ENV=production npm start
+    healthCheckPath: /
+    disk:
+      name: hydra-trade-data
+      mountPath: /opt/render/project/src/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        value: 24.14.1
+      - key: DATABASE_PATH
+        value: /opt/render/project/src/data/smart_trader.sqlite
+      - key: JWT_SECRET
+        generateValue: true
+      - key: ADMIN_EMAIL
+        value: admin@tagoption.local
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: ADMIN_NAME
+        value: Hydra Trade Admin
+      - key: PAYMENTS_MODE
+        value: sandbox

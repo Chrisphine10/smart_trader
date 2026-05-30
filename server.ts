@@ -24,6 +24,6 @@ const server = createServer((request, response) => {
 
 attachWebSocketServer(server);
 
-server.listen(config.port, () => {
+server.listen(config.port, "0.0.0.0", () => {
   console.log(`Hydra Trade listening on http://localhost:${config.port}`);
 });
