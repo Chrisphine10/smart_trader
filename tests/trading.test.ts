@@ -1,0 +1,142 @@
+import { beforeAll, describe, expect, it } from "vitest";
+import { db, hashPassword, migrate, referralCode, trc20Address, type User } from "../lib/db";
+import { calculateEscrowSplit, maybeCreateAutoTrade, startAutoSession } from "../lib/repositories";
+import { chooseSmartDigitContract, payoutMultiplier, potentialPayout, resolveDigitTrade } from "../lib/trading";
+
+function createTradingUser(label: string): User {
+  const id = crypto.randomUUID();
+  db.prepare(`
+    INSERT INTO users (id, email, username, password_hash, balance, real_balance, demo_balance, is_demo, referral_code, trc20_address, kyc_status)
+    VALUES (?, ?, ?, ?, 1000, 1000, 10000, 0, ?, ?, 'approved')
+  `).run(id, `${label}-${id}@example.test`, label, hashPassword("password123"), referralCode(), trc20Address());
+  return db.prepare("SELECT * FROM users WHERE id = ?").get(id) as User;
+}
+
+describe("trading math", () => {
+  beforeAll(() => {
+    migrate();
+  });
+
+  it("calculates over and under payouts from selected digit", () => {
+    expect(potentialPayout(25, "over", 5)).toBe(59.38);
+    expect(potentialPayout(25, "under", 5)).toBe(47.5);
+  });
+
+  it("returns zero for impossible over or under bets", () => {
+    expect(payoutMultiplier("over", 9)).toBe(0);
+    expect(payoutMultiplier("under", 0)).toBe(0);
+  });
+
+  it("resolves digit contracts", () => {
+    expect(resolveDigitTrade("over", 5, 7)).toBe(true);
+    expect(resolveDigitTrade("under", 5, 7)).toBe(false);
+    expect(resolveDigitTrade("match", 5, 5)).toBe(true);
+    expect(resolveDigitTrade("differ", 5, 5)).toBe(false);
+    expect(resolveDigitTrade("even", 5, 8)).toBe(true);
+    expect(resolveDigitTrade("odd", 5, 8)).toBe(false);
+  });
+
+  it("calculates even and odd payouts", () => {
+    expect(potentialPayout(10, "even")).toBe(19.52);
+    expect(potentialPayout(10, "odd")).toBe(19.52);
+  });
+
+  it("splits winning payouts into user net and system escrow", () => {
+    expect(calculateEscrowSplit(180, 10)).toEqual({ escrowFee: 18, netPayout: 162 });
+    expect(calculateEscrowSplit(99.99, 10)).toEqual({ escrowFee: 10, netPayout: 89.99 });
+  });
+
+  it("replaces an active real auto session and keeps even/odd trade metadata", () => {
+    const user = createTradingUser("auto-session");
+    const firstSession = startAutoSession(user, {
+      asset: "volatility_10_1s",
+      direction: "even",
+      stake: 10,
+      isDemo: false,
+      selectedDigit: 5,
+    });
+    expect(firstSession).toMatchObject({ active: true, direction: "even", tradeType: "even_odd", strategy: "smart" });
+
+    const replacementSession = startAutoSession(user, {
+      asset: "volatility_10_1s",
+      direction: "odd",
+      stake: 10,
+      isDemo: false,
+      selectedDigit: 5,
+    });
+    expect(replacementSession).toMatchObject({ active: true, direction: "odd", tradeType: "even_odd", strategy: "smart" });
+  });
+
+  it("chooses a smart contract from recent digit edge", () => {
+    const history = [
+      ...Array.from({ length: 110 }, (_, index) => ({ price: 100 + index / 100, lastDigit: 7 })),
+      ...Array.from({ length: 20 }, (_, index) => ({ price: 101 + index / 100, lastDigit: index % 10 })),
+    ];
+    const decision = chooseSmartDigitContract({ history, lastDigit: 7, movement: 0.3 });
+
+    expect(decision.direction).toBe("match");
+    expect(decision.selectedDigit).toBe(7);
+    expect(decision.edge).toBeGreaterThan(0);
+  });
+
+  it("auto smart strategy opens the dynamically selected contract", () => {
+    const user = createTradingUser("smart-auto");
+    startAutoSession(user, {
+      asset: "volatility_10_1s",
+      direction: "even",
+      stake: 10,
+      isDemo: false,
+      selectedDigit: 5,
+      strategy: "smart",
+      durationTicks: 15,
+    });
+
+    const history = [
+      ...Array.from({ length: 120 }, (_, index) => ({ price: 100 + index / 100, sequence: index, timestamp: new Date(2026, 0, 1, 0, 0, index).toISOString(), lastDigit: 7 })),
+      ...Array.from({ length: 20 }, (_, index) => ({ price: 101 + index / 100, sequence: index + 120, timestamp: new Date(2026, 0, 1, 0, 2, index).toISOString(), lastDigit: index % 10 })),
+    ];
+    const position = maybeCreateAutoTrade(user.id, {
+      asset: "volatility_10_1s",
+      price: 102,
+      lastDigit: 7,
+      sequence: 200,
+      timestamp: new Date(2026, 0, 1, 0, 3, 0).toISOString(),
+      history,
+      movement: 0.4,
+    }) as Record<string, unknown>;
+
+    expect(position.direction).toBe("match");
+    expect(position.selected_digit).toBe(7);
+    expect(position.ticks).toBe(15);
+  });
+
+  it("forex auto opens Buy or Sell price contracts with leverage", () => {
+    const user = createTradingUser("forex-auto");
+    const session = startAutoSession(user, {
+      asset: "eur_usd",
+      direction: "over",
+      stake: 10,
+      isDemo: false,
+      contractMode: "forex",
+      leverage: 20,
+      strategy: "forex_trend",
+      durationTicks: 30,
+    });
+
+    expect(session).toMatchObject({ active: true, direction: "over", tradeType: "forex", leverage: 20 });
+
+    const position = maybeCreateAutoTrade(user.id, {
+      asset: "eur_usd",
+      price: 1.08765,
+      lastDigit: 5,
+      sequence: 1,
+      timestamp: new Date(2026, 0, 1, 0, 0, 0).toISOString(),
+      movement: 0.1,
+    }) as Record<string, unknown>;
+
+    expect(position.trade_type).toBe("forex");
+    expect(position.direction).toBe("over");
+    expect(position.potential_payout).toBe(170);
+    expect(position.ticks).toBe(30);
+  });
+});

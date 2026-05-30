@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192" role="img" aria-label="Hydra Trade">
+  <rect width="192" height="192" rx="42" fill="#0b0f16"/>
+  <path d="M44 123.5 78.5 89l22 22L148 63.5" fill="none" stroke="#FACC15" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M48 143h96" fill="none" stroke="#F59E0B" stroke-width="12" stroke-linecap="round"/>
+  <circle cx="148" cy="63.5" r="13" fill="#F59E0B"/>
+</svg>

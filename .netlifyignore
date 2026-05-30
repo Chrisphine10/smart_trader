@@ -1,0 +1,11 @@
+node_modules/
+.git/
+.codex/
+.next/
+.netlify/
+data/
+dist/
+tests/
+*.log
+*.tsbuildinfo
+*.docx

@@ -1,6 +1,11 @@
 node_modules/
 dist/
+.next/
 data/
 .env
 .codex/
 *.log
+*.tsbuildinfo
+
+# Local Netlify folder
+.netlify
