@@ -899,6 +899,9 @@ export function TradeApp() {
   );
   const movement = Number(tick?.movement ?? 0);
   const selectableAssets = isForexMode ? forexAssets : assets.filter((item) => !isForexAsset(item));
+  const marketToggleTarget: TradeWorkspace = isForexMode ? "Spot" : "Forex";
+  const marketToggleLabel = isForexMode ? "Index Trade" : "Forex";
+  const showDigitSelector = !isForexMode && contractGroup !== "evenOdd";
   const pricePrecision = isForexAsset(asset) ? asset.includes("jpy") ? 3 : 5 : 2;
   const formatActivePrice = (value: number | undefined) => typeof value === "number" ? value.toFixed(pricePrecision) : "-";
 
@@ -922,8 +925,15 @@ export function TradeApp() {
               <button onClick={() => switchAccount(true)} className={`rounded-md px-3 py-1.5 text-xs font-bold ${user.is_demo ? "bg-brand" : "text-gray-300 hover:bg-white/5"}`}>Demo</button>
               <button onClick={() => switchAccount(false)} className={`rounded-md px-3 py-1.5 text-xs font-bold ${!user.is_demo ? "bg-brand" : "text-gray-300 hover:bg-white/5"}`}>Real</button>
             </div>
+            <button onClick={() => setAiOpen(true)} className="inline-flex h-10 shrink-0 items-center gap-1.5 rounded-lg border border-brand/25 bg-brand/10 px-3 text-xs font-black text-brand hover:bg-brand/15"><Bot size={15} /><span>AI</span></button>
             <button onClick={() => selectWorkspace("P2P")} className="inline-flex h-10 shrink-0 items-center gap-1.5 rounded-lg bg-white/5 px-3 text-xs font-bold text-gray-200 hover:bg-white/10"><ArrowLeftRight size={15} /><span>P2P</span></button>
-            <button onClick={() => selectWorkspace("Forex")} className={`inline-flex h-10 shrink-0 items-center gap-1.5 rounded-lg px-3 text-xs font-bold ${activeWorkspace === "Forex" ? "bg-brand text-ink" : "bg-white/5 text-gray-200 hover:bg-white/10"}`}><TrendingUp size={15} /><span>Forex</span></button>
+            <button
+              onClick={() => selectWorkspace(marketToggleTarget)}
+              className={`inline-flex h-10 shrink-0 items-center gap-1.5 rounded-lg px-3 text-xs font-bold ${isForexMode ? "bg-brand text-ink" : "bg-white/5 text-gray-200 hover:bg-white/10"}`}
+            >
+              {isForexMode ? <Grid3X3 size={15} /> : <TrendingUp size={15} />}
+              <span>{marketToggleLabel}</span>
+            </button>
             <button aria-label="Open wallet" onClick={() => { setWalletSection("deposit"); setWalletOpen(true); }} className="inline-flex h-10 min-w-[112px] shrink-0 items-center justify-center gap-1.5 rounded-lg bg-white/5 px-3 text-xs font-bold hover:bg-white/10"><Wallet size={15} /><span>${Number(user.active_balance).toFixed(2)}</span></button>
             <button
               aria-label={`Switch to ${themeMode === "light" ? "dark" : "light"} theme`}
@@ -1098,7 +1108,6 @@ export function TradeApp() {
                 <div className="mb-2 flex items-center justify-between gap-3">
                   <h2 className="text-sm font-black uppercase tracking-wide text-gray-400">Mode</h2>
                   <div className="flex items-center gap-2">
-                    <button onClick={() => setAiOpen(true)} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-brand/25 bg-brand/10 px-2 text-xs font-black text-brand hover:bg-brand/15"><Bot size={14} /> AI</button>
                     <span className="text-xs font-semibold text-gray-500">
                       {isForexMode
                         ? mode === "auto" ? isAutoRunning ? "Running" : "Ready" : "Manual"
@@ -1221,25 +1230,39 @@ export function TradeApp() {
                   </div>
                 ) : (
                   <div className="mt-2 rounded-xl border border-white/10 bg-white/5 p-2">
+                    <label className="block text-[11px] font-black uppercase tracking-wide text-gray-500" htmlFor="ticket-index-select">Index</label>
+                    <select
+                      id="ticket-index-select"
+                      value={asset}
+                      onChange={(event) => switchAsset(event.target.value)}
+                      className="field mt-1 h-10 py-0 text-sm"
+                    >
+                      {selectableAssets.map((item) => <option key={item} value={item}>{assetLabel(item)}</option>)}
+                    </select>
+                  </div>
+                )}
+
+                {showDigitSelector ? (
+                  <div className="mt-2 rounded-xl border border-white/10 bg-white/5 p-2">
                     <div className="mb-2 flex items-center justify-between">
-                      <span className="text-[11px] font-black uppercase tracking-wide text-gray-500">Index</span>
+                      <span className="text-[11px] font-black uppercase tracking-wide text-gray-500">Digit</span>
                       <span className="text-xs font-black text-brand">D{selectedDigit}</span>
                     </div>
-                    <div className="grid grid-cols-5 gap-1.5">
+                    <div className="grid grid-cols-10 gap-1">
                       {digitOptions.map((digit) => (
                         <button
                           key={digit}
                           type="button"
                           aria-pressed={selectedDigit === digit}
                           onClick={() => setSelectedDigit(digit)}
-                          className={`grid aspect-square place-items-center rounded-full border text-sm font-black ${selectedDigit === digit ? "border-brand bg-brand text-ink shadow-sm" : "border-white/10 bg-white/5 text-gray-300 hover:bg-white/10 hover:text-white"}`}
+                          className={`grid aspect-square min-h-7 place-items-center rounded-full border text-[11px] font-black ${selectedDigit === digit ? "border-brand bg-brand text-ink shadow-sm" : "border-white/10 bg-white/5 text-gray-300 hover:bg-white/10 hover:text-white"}`}
                         >
                           {digit}
                         </button>
                       ))}
                     </div>
                   </div>
-                )}
+                ) : null}
               </div>
 
               {mode === "auto" && (
