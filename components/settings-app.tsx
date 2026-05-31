@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Bell, Copy, CreditCard, KeyRound, Monitor, Save, Shield, Smartphone, User, Wallet } from "lucide-react";
 import { Logo } from "./logo";
+import { PublicThemeShell } from "./public-theme-shell";
+import { PublicThemeToggle } from "./public-theme-toggle";
 
 type SettingsTab = "profile" | "security" | "payments" | "preferences";
 
@@ -14,7 +16,7 @@ export function SettingsApp() {
   const [trc20Address, setTrc20Address] = useState("");
   const [exchangeRate, setExchangeRate] = useState(129.09);
   const [kycForm, setKycForm] = useState({ fullName: "", documentType: "national_id", documentNumber: "", country: "KE", notes: "" });
-  const [preferences, setPreferences] = useState({ theme: "Dark", sound: "Enabled", chartDensity: "Professional", notifications: "Trade + wallet" });
+  const [preferences, setPreferences] = useState({ theme: "Light", sound: "Enabled", chartDensity: "Professional", notifications: "Trade + wallet" });
 
   useEffect(() => {
     const token = localStorage.getItem("token");
@@ -28,6 +30,10 @@ export function SettingsApp() {
     fetch("/api/auth/exchange-rate", { headers }).then((response) => response.json()).then((data) => setExchangeRate(Number(data.rate ?? 129.09))).catch(() => undefined);
     const saved = localStorage.getItem("hydratrade.preferences");
     if (saved) setPreferences((current) => ({ ...current, ...JSON.parse(saved) }));
+    const savedTheme = localStorage.getItem("trade-theme");
+    if (savedTheme === "light" || savedTheme === "dark") {
+      setPreferences((current) => ({ ...current, theme: savedTheme === "dark" ? "Dark" : "Light" }));
+    }
   }, []);
 
   const profileRows = useMemo(() => [
@@ -41,6 +47,14 @@ export function SettingsApp() {
   function savePreferences() {
     localStorage.setItem("hydratrade.preferences", JSON.stringify(preferences));
     setNotice("Preferences saved on this device");
+  }
+
+  function setPreferenceTheme(value: string) {
+    const theme = value === "Dark" ? "dark" : "light";
+    setPreferences((current) => ({ ...current, theme: value }));
+    localStorage.setItem("trade-theme", theme);
+    document.documentElement.dataset.theme = theme;
+    window.dispatchEvent(new CustomEvent("trade-theme-change", { detail: theme }));
   }
 
   async function submitKyc() {
@@ -60,11 +74,15 @@ export function SettingsApp() {
   }
 
   return (
-    <main className="min-h-screen bg-[#0b0f16] text-white">
+    <PublicThemeShell>
+    <div className="min-h-screen bg-[#0b0f16] text-white">
       <header className="border-b border-white/10 bg-[#0f141d]">
         <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-5">
           <Logo href="/trade" label="Settings Center" size="sm" />
-          <Link href="/trade" className="rounded-xl bg-white/5 px-4 py-2 text-sm font-bold">Back to Trade</Link>
+          <div className="flex items-center gap-2">
+            <PublicThemeToggle />
+            <Link href="/trade" className="rounded-xl bg-white/5 px-4 py-2 text-sm font-bold">Back to Trade</Link>
+          </div>
         </div>
       </header>
 
@@ -162,7 +180,7 @@ export function SettingsApp() {
           {tab === "preferences" && (
             <Panel icon={<Bell />} eyebrow="Experience" title="Trading Preferences">
               <div className="grid gap-4 md:grid-cols-2">
-                <Choice label="Theme" value={preferences.theme} options={["Dark", "High contrast"]} onChange={(value) => setPreferences((current) => ({ ...current, theme: value }))} />
+                <Choice label="Theme" value={preferences.theme} options={["Light", "Dark"]} onChange={setPreferenceTheme} />
                 <Choice label="Sound" value={preferences.sound} options={["Enabled", "Muted"]} onChange={(value) => setPreferences((current) => ({ ...current, sound: value }))} />
                 <Choice label="Chart density" value={preferences.chartDensity} options={["Professional", "Compact", "Expanded"]} onChange={(value) => setPreferences((current) => ({ ...current, chartDensity: value }))} />
                 <Choice label="Notifications" value={preferences.notifications} options={["Trade + wallet", "Wallet only", "Critical only"]} onChange={(value) => setPreferences((current) => ({ ...current, notifications: value }))} />
@@ -174,7 +192,8 @@ export function SettingsApp() {
           {notice && <div className="rounded-2xl border border-white/10 bg-white/5 p-4 text-sm text-gray-300">{notice}</div>}
         </section>
       </div>
-    </main>
+    </div>
+    </PublicThemeShell>
   );
 }
 

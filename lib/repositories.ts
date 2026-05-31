@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { db, getUserById, money, type User } from "./db";
-import { chooseSmartDigitContract, isForexAsset, potentialPayout, resolveDigitTrade, type Direction } from "./trading";
+import { assets, chooseSmartDigitContract, isDirection, isForexAsset, potentialPayout, resolveDigitTrade, type Direction } from "./trading";
 
 export type Tick = {
   asset: string;
@@ -14,9 +14,10 @@ export type Tick = {
   volatility?: number;
 };
 
-export function calculateEscrowSplit(grossPayout: number, percent: number) {
+export function calculateEscrowSplit(grossPayout: number, percent: number, escrowBase = grossPayout) {
   const safePercent = Math.max(0, Math.min(100, Number.isFinite(percent) ? percent : 0));
-  const escrowFee = money((grossPayout * safePercent) / 100);
+  const safeBase = Math.max(0, Number.isFinite(escrowBase) ? escrowBase : grossPayout);
+  const escrowFee = money((safeBase * safePercent) / 100);
   return {
     escrowFee,
     netPayout: money(grossPayout - escrowFee),
@@ -29,6 +30,22 @@ function tradeTypeForDirection(direction: Direction) {
   return "over_under";
 }
 
+function clampNumber(value: unknown, fallback: number, min: number, max: number) {
+  const parsed = Number(value ?? fallback);
+  const safe = Number.isFinite(parsed) ? parsed : fallback;
+  return Math.max(min, Math.min(max, safe));
+}
+
+function clampInteger(value: unknown, fallback: number, min: number, max: number) {
+  return Math.trunc(clampNumber(value, fallback, min, max));
+}
+
+function selectedDigitOrThrow(value: unknown) {
+  const digit = Number(value ?? 5);
+  if (!Number.isInteger(digit) || digit < 0 || digit > 9) throw new Error("Selected digit must be between 0 and 9");
+  return digit;
+}
+
 export function updateUserBalance(user: User, isDemo: boolean, nextBalance: number) {
   if (isDemo) {
     db.prepare("UPDATE users SET demo_balance = ?, balance = ?, is_demo = 1 WHERE id = ?").run(nextBalance, nextBalance, user.id);
@@ -38,6 +55,8 @@ export function updateUserBalance(user: User, isDemo: boolean, nextBalance: numb
 }
 
 export function createManualTrade(user: User, config: { asset: string; direction: Direction; stake: number; selectedDigit?: number; isDemo: boolean; durationTicks?: number; contractMode?: "digit" | "forex" | "futures"; leverage?: number }, tick: Tick) {
+  if (!assets.includes(config.asset)) throw new Error("Unsupported trading asset");
+  if (!isDirection(config.direction)) throw new Error("Unsupported trade direction");
   const stake = money(config.stake);
   if (stake < 0.1) throw new Error("Minimum stake amount is $0.10");
   const maxStake = Number(getAppSetting("risk.maxStake", "500"));
@@ -51,10 +70,10 @@ export function createManualTrade(user: User, config: { asset: string; direction
   if (stake > activeBalance) throw new Error("Insufficient balance");
   const entryPrice = tick.price;
   const entryDigit = tick.lastDigit;
-  const durationTicks = Math.max(1, Math.min(300, Number(config.durationTicks ?? 5)));
+  const durationTicks = clampInteger(config.durationTicks, 5, 1, 300);
   const isPriceContract = config.contractMode === "forex" || config.contractMode === "futures";
-  const leverage = Math.max(1, Math.min(50, Number(config.leverage ?? 1)));
-  const selectedDigit = Number.isInteger(config.selectedDigit) ? Number(config.selectedDigit) : 5;
+  const leverage = clampInteger(config.leverage, 1, 1, 50);
+  const selectedDigit = selectedDigitOrThrow(config.selectedDigit);
   if (!isPriceContract && config.direction === "over" && selectedDigit === 9) throw new Error("Cannot bet Over 9");
   if (!isPriceContract && config.direction === "under" && selectedDigit === 0) throw new Error("Cannot bet Under 0");
   if (isPriceContract && !["over", "under"].includes(config.direction)) throw new Error("Forex supports Buy or Sell only");
@@ -114,9 +133,11 @@ export function settleOpenPositions(userId: string, asset: string, tick: Tick) {
       : resolveDigitTrade(direction, selectedDigit, tick.lastDigit);
     const escrowPercent = Number(getAppSetting("escrow.winPayoutPercent", "10"));
     const escrowAddress = getAppSetting("escrow.bitcoinAddress", "bitcoin:BC1Q2JYAXPRTDMWVGY6E6YKX2E9K9RYSRG68DZ528W");
-    const { escrowFee, netPayout } = won ? calculateEscrowSplit(grossPayout, escrowPercent) : { escrowFee: 0, netPayout: 0 };
+    const grossProfit = Math.max(0, money(grossPayout - stake));
+    const { escrowFee, netPayout } = won ? calculateEscrowSplit(grossPayout, escrowPercent, grossProfit) : { escrowFee: 0, netPayout: 0 };
     const profitLoss = won ? money(netPayout - stake) : money(-stake);
     const balanceAfter = won ? money(activeBalance + netPayout) : money(activeBalance);
+    const balanceAfterGrossPayout = won ? money(activeBalance + grossPayout) : balanceAfter;
     const status = won ? "won" : "lost";
 
     db.exec("BEGIN");
@@ -135,8 +156,8 @@ export function settleOpenPositions(userId: string, asset: string, tick: Tick) {
         userId,
         positionId,
         won ? "payout" : "loss",
-        won ? netPayout : 0,
-        balanceAfter,
+        won ? grossPayout : 0,
+        won && escrowFee > 0 ? balanceAfterGrossPayout : balanceAfter,
         isPriceContract
           ? won ? `Forex ${direction === "over" ? "BUY" : "SELL"} closed in profit at ${tick.price.toFixed(5)}` : `Forex ${direction === "over" ? "BUY" : "SELL"} closed at a loss at ${tick.price.toFixed(5)}`
           : won ? `Won on ${asset} - ${direction.toUpperCase()} at digit ${tick.lastDigit}` : `Lost on ${asset} - ${direction.toUpperCase()} at digit ${tick.lastDigit}`,
@@ -157,7 +178,7 @@ export function settleOpenPositions(userId: string, asset: string, tick: Tick) {
           positionId,
           -escrowFee,
           balanceAfter,
-          `System escrow split ${escrowPercent}% of gross payout $${grossPayout.toFixed(2)} to BTC ${escrowAddress}`,
+          `System escrow split ${escrowPercent}% of gross profit $${grossProfit.toFixed(2)} to BTC ${escrowAddress}`,
           asset,
           direction,
           String(row.trade_type),
@@ -203,6 +224,8 @@ export function listTransactions(userId: string, limit = 40) {
 }
 
 export function startAutoSession(user: User, config: { direction: Direction; stake: number; targetProfit?: number; targetLoss?: number; lossMultiple?: number; asset: string; isDemo: boolean; selectedDigit?: number; strategy?: string; maxTrades?: number; durationTicks?: number; contractMode?: "digit" | "forex"; leverage?: number }) {
+  if (!assets.includes(config.asset)) throw new Error("Unsupported trading asset");
+  if (!isDirection(config.direction)) throw new Error("Unsupported trade direction");
   if (Boolean(config.isDemo) !== Boolean(user.is_demo)) throw new Error("Bot mode does not match active account mode");
   db.prepare("UPDATE auto_trading_sessions SET active = 0, stopped_at = CURRENT_TIMESTAMP, stop_reason = 'replaced' WHERE user_id = ? AND active = 1").run(user.id);
   const activeRealBots = db.prepare("SELECT COUNT(*) as count FROM auto_trading_sessions WHERE user_id = ? AND is_demo = 0 AND active = 1").get(user.id) as { count: number };
@@ -210,7 +233,8 @@ export function startAutoSession(user: User, config: { direction: Direction; sta
   if (!config.isDemo && maxBotSessions > 0 && activeRealBots.count >= maxBotSessions) throw new Error(`Maximum real bot sessions reached (${maxBotSessions})`);
   const id = randomUUID();
   const isForex = config.contractMode === "forex" || isForexAsset(config.asset);
-  const leverage = Math.max(1, Math.min(50, Number(config.leverage ?? 1)));
+  const leverage = clampInteger(config.leverage, 1, 1, 50);
+  const selectedDigit = selectedDigitOrThrow(config.selectedDigit);
   if (isForex && !["over", "under"].includes(config.direction)) throw new Error("Forex auto supports Buy or Sell only");
   const tradeType = isForex ? "forex" : tradeTypeForDirection(config.direction);
   db.prepare(`
@@ -226,14 +250,14 @@ export function startAutoSession(user: User, config: { direction: Direction; sta
     money(config.stake),
     config.targetProfit ? money(config.targetProfit) : null,
     config.targetLoss ? money(config.targetLoss) : null,
-    config.lossMultiple ? money(config.lossMultiple) : 1,
+    clampNumber(config.lossMultiple, 1, 1, 10),
     config.asset,
     config.isDemo ? 1 : 0,
-    config.selectedDigit ?? 5,
+    selectedDigit,
     tradeType,
     config.strategy ?? (isForex ? "forex_trend" : "smart"),
-    Math.max(1, Math.min(500, Number(config.maxTrades ?? 25))),
-    Math.max(1, Math.min(300, Number(config.durationTicks ?? 5))),
+    clampInteger(config.maxTrades, 25, 1, 500),
+    clampInteger(config.durationTicks, 5, 1, 300),
     leverage,
   );
   return getAutoSession(user.id);
@@ -277,7 +301,7 @@ export function stopAutoSession(userId: string, reason = "manual_stop") {
 }
 
 export function updateAutoSessionSettings(userId: string, config: { durationTicks?: number }) {
-  const durationTicks = Math.max(1, Math.min(300, Number(config.durationTicks ?? 5)));
+  const durationTicks = clampInteger(config.durationTicks, 5, 1, 300);
   db.prepare("UPDATE auto_trading_sessions SET duration_ticks = ? WHERE user_id = ? AND active = 1").run(durationTicks, userId);
   return getAutoSession(userId);
 }
@@ -295,7 +319,7 @@ export function recordAutoSettlement(userId: string, closedPositions: Array<Reco
   if (!relevant) return getAutoSession(userId);
 
   const profitLoss = money(Number(relevant.profit_loss ?? 0));
-  const won = profitLoss >= 0;
+  const won = String(relevant.status) === "won";
   const sessionPL = money(Number(session.session_pl ?? 0) + profitLoss);
   const originalStake = money(Number(session.original_stake ?? 0.1));
   const strategy = String(session.strategy ?? "smart");

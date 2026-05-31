@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, ArrowDown, ArrowLeftRight, ArrowUp, Banknote, Bell, Bot, ChevronDown, CircleUserRound, Copy, CreditCard, Grid3X3, Headphones, LogOut, Minus, Moon, Plus, Smartphone, Sun, Target, TrendingUp, Wallet } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowLeftRight, ArrowUp, Banknote, Bell, Bot, ChevronDown, CircleUserRound, Copy, CreditCard, Grid3X3, LogOut, Minus, Moon, Plus, Smartphone, Sun, Target, TrendingUp, Volume2, VolumeX, Wallet } from "lucide-react";
 import { buildTimeframeHistory, chartTimeframes, timeframeBucketSize, type ChartTimeframe } from "../lib/chart-timeframes";
 import { assets, assetLabel, forexAssets, isForexAsset, payoutMultiplier, potentialPayout, type Direction } from "../lib/trading";
 import { Logo } from "./logo";
@@ -65,6 +65,14 @@ type ChartPoint = { x: number; y: number; lastDigit?: number };
 type AiScanScope = "volatility" | "forex";
 type AiRisk = "low" | "balanced" | "aggressive";
 type AiTradeMode = "manual" | "auto";
+type PendingTradeAction = { direction: Direction; mode: "manual" | "auto-start" | "auto-stop" };
+type TradeSound = "entry" | "win" | "loss";
+type TradeOutcome = {
+  id: string;
+  asset: string;
+  detail: string;
+  profitLoss: number;
+};
 type AiRecommendation = {
   scope: AiScanScope;
   risk: AiRisk;
@@ -326,6 +334,7 @@ export function TradeApp() {
   const [activeTimeframe, setActiveTimeframe] = useState<ChartTimeframe>("1s");
   const [activityTab, setActivityTab] = useState<ActivityTab>("open");
   const [themeMode, setThemeMode] = useState<ThemeMode>("light");
+  const [audioEnabled, setAudioEnabled] = useState(true);
   const [status, setStatus] = useState("connecting");
   const [walletOpen, setWalletOpen] = useState(false);
   const [walletSection, setWalletSection] = useState<"history" | "deposit" | "withdraw" | "referrals">("deposit");
@@ -335,18 +344,137 @@ export function TradeApp() {
   const [referral, setReferral] = useState<any>(null);
   const [message, setMessage] = useState("");
   const [autoSession, setAutoSession] = useState<AutoSession | null>(null);
+  const [pendingTradeAction, setPendingTradeActionState] = useState<PendingTradeAction | null>(null);
+  const [autoControlDirection, setAutoControlDirection] = useState<Direction | null>(null);
+  const [lastTradeOutcome, setLastTradeOutcome] = useState<TradeOutcome | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const pendingTradeActionRef = useRef<PendingTradeAction | null>(null);
+  const audioEnabledRef = useRef(true);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const suppressNextEntrySoundRef = useRef(false);
+  const defaultRealAppliedRef = useRef(false);
+  const tradeOutcomeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const positionStatusRef = useRef<Map<string, string>>(new Map());
   const displayedChartPointsRef = useRef<ChartPoint[]>([]);
+
+  const setPendingTradeAction = useCallback((action: PendingTradeAction | null) => {
+    pendingTradeActionRef.current = action;
+    setPendingTradeActionState(action);
+  }, []);
 
   useEffect(() => {
     const savedTheme = localStorage.getItem("trade-theme");
     if (savedTheme === "light" || savedTheme === "dark") setThemeMode(savedTheme);
+    const savedAudio = localStorage.getItem("trade-audio-enabled");
+    const nextAudioEnabled = savedAudio !== "false";
+    audioEnabledRef.current = nextAudioEnabled;
+    setAudioEnabled(nextAudioEnabled);
   }, []);
 
   useEffect(() => {
     localStorage.setItem("trade-theme", themeMode);
     document.documentElement.dataset.theme = themeMode;
   }, [themeMode]);
+
+  useEffect(() => {
+    const handleThemeChange = (event: Event) => {
+      const nextTheme = (event as CustomEvent<ThemeMode>).detail;
+      if (nextTheme === "light" || nextTheme === "dark") setThemeMode(nextTheme);
+    };
+    const handleStorageChange = (event: StorageEvent) => {
+      if (event.key === "trade-theme" && (event.newValue === "light" || event.newValue === "dark")) {
+        setThemeMode(event.newValue);
+      }
+    };
+
+    window.addEventListener("trade-theme-change", handleThemeChange);
+    window.addEventListener("storage", handleStorageChange);
+    return () => {
+      window.removeEventListener("trade-theme-change", handleThemeChange);
+      window.removeEventListener("storage", handleStorageChange);
+    };
+  }, []);
+
+  const playTradeSound = useCallback((sound: TradeSound) => {
+    if (!audioEnabledRef.current || typeof window === "undefined") return;
+    const AudioContextConstructor = window.AudioContext ?? (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioContextConstructor) return;
+    const context = audioContextRef.current ?? new AudioContextConstructor();
+    audioContextRef.current = context;
+    void context.resume();
+
+    const now = context.currentTime;
+    const sequence = sound === "win"
+      ? [740, 932, 1175]
+      : sound === "loss"
+        ? [260, 196]
+        : [520, 660];
+
+    sequence.forEach((frequency, index) => {
+      const start = now + index * 0.08;
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      oscillator.type = sound === "loss" ? "triangle" : "sine";
+      oscillator.frequency.setValueAtTime(frequency, start);
+      gain.gain.setValueAtTime(0.0001, start);
+      gain.gain.exponentialRampToValueAtTime(sound === "loss" ? 0.06 : 0.075, start + 0.012);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.13);
+      oscillator.connect(gain);
+      gain.connect(context.destination);
+      oscillator.start(start);
+      oscillator.stop(start + 0.15);
+    });
+  }, []);
+
+  const toggleTradeAudio = useCallback(() => {
+    const nextAudioEnabled = !audioEnabledRef.current;
+    audioEnabledRef.current = nextAudioEnabled;
+    setAudioEnabled(nextAudioEnabled);
+    localStorage.setItem("trade-audio-enabled", nextAudioEnabled ? "true" : "false");
+    if (nextAudioEnabled) window.setTimeout(() => playTradeSound("entry"), 0);
+  }, [playTradeSound]);
+
+  const playPositionSound = useCallback((position: any, previousStatus?: string) => {
+    const nextStatus = String(position?.status ?? "");
+    if (!nextStatus || previousStatus === nextStatus) return;
+    if (nextStatus === "open") {
+      if (suppressNextEntrySoundRef.current) {
+        suppressNextEntrySoundRef.current = false;
+        return;
+      }
+      playTradeSound("entry");
+      return;
+    }
+    const profitLoss = Number(position?.profit_loss ?? 0);
+    playTradeSound(nextStatus === "won" || profitLoss > 0 ? "win" : "loss");
+  }, [playTradeSound]);
+
+  const showTradeOutcome = useCallback((position: any) => {
+    if (!position?.id || position.status === "open") return;
+    const isForex = position.trade_type === "forex" || position.trade_type === "futures";
+    const side = isForex ? (position.direction === "over" ? "BUY" : "SELL") : String(position.direction ?? "").toUpperCase();
+    const detail = isForex
+      ? `${side} forex`
+      : position.trade_type === "even_odd"
+        ? side
+        : `${side} digit ${position.selected_digit ?? "-"}`;
+
+    if (tradeOutcomeTimerRef.current) clearTimeout(tradeOutcomeTimerRef.current);
+    setLastTradeOutcome({
+      id: String(position.id),
+      asset: String(position.asset ?? ""),
+      detail,
+      profitLoss: Number(position.profit_loss ?? 0),
+    });
+    tradeOutcomeTimerRef.current = setTimeout(() => {
+      setLastTradeOutcome(null);
+      tradeOutcomeTimerRef.current = null;
+    }, 9000);
+  }, []);
+
+  useEffect(() => () => {
+    if (tradeOutcomeTimerRef.current) clearTimeout(tradeOutcomeTimerRef.current);
+  }, []);
 
   const redirectToTradeLogin = useCallback(() => {
     location.href = `/login?redirect=${encodeURIComponent("/trade")}&account=real`;
@@ -374,16 +502,30 @@ export function TradeApp() {
       }, {}).catch((): { session?: AutoSession | null } => ({})),
     ]);
     setUser(me.user);
-    setPositions(realPositions.positions ?? []);
+    const nextPositions = realPositions.positions ?? [];
+    positionStatusRef.current = new Map(nextPositions.filter((position) => position?.id).map((position) => [String(position.id), String(position.status ?? "")]));
+    setPositions(nextPositions);
     setTransactions(tx.transactions ?? []);
     setReferral(ref);
-    if (autoStatus.session !== undefined) setAutoSession(autoStatus.session ?? null);
+    if (autoStatus.session !== undefined) {
+      const nextSession = autoStatus.session ?? null;
+      setAutoSession(nextSession);
+      setAutoControlDirection((current) => nextSession?.active ? current ?? nextSession.direction ?? null : null);
+    }
   }, []);
 
   const applyPositionUpdate = useCallback((position: any) => {
     if (!position?.id) return;
+    const id = String(position.id);
+    const nextStatus = String(position.status ?? "");
+    const previousStatus = positionStatusRef.current.get(id);
+    if (nextStatus && previousStatus !== nextStatus) {
+      positionStatusRef.current.set(id, nextStatus);
+      playPositionSound(position, previousStatus);
+      if (nextStatus !== "open") showTradeOutcome(position);
+    }
     setPositions((items) => [position, ...items.filter((item) => item.id !== position.id)].slice(0, 60));
-  }, []);
+  }, [playPositionSound, showTradeOutcome]);
 
   const postTradeAction = useCallback(async (type: string, config: Record<string, unknown> = {}) => {
     if (!token) return;
@@ -394,6 +536,8 @@ export function TradeApp() {
     });
     const data = await readJson<{ position?: any; positions?: any[]; user?: User; session?: AutoSession | null; error?: string }>(response, {});
     if (!response.ok) {
+      suppressNextEntrySoundRef.current = false;
+      setPendingTradeAction(null);
       if (response.status === 401) {
         redirectToTradeLogin();
         return;
@@ -410,10 +554,16 @@ export function TradeApp() {
     if (data.user) setUser(data.user);
     if (data.session !== undefined) {
       setAutoSession(data.session);
+      const pendingAction = pendingTradeActionRef.current;
+      setAutoControlDirection((current) => data.session?.active ? pendingAction?.mode === "auto-start" ? pendingAction.direction : current ?? data.session.direction ?? null : null);
       setMessage(data.session?.active ? "Auto-trading is running" : "Auto-trading stopped");
     }
+    if (type === "manual_trade" || type === "auto_trading_start" || type === "auto_trading_stop") {
+      if (!data.position) suppressNextEntrySoundRef.current = false;
+      setPendingTradeAction(null);
+    }
     await load(token).catch(() => undefined);
-  }, [applyPositionUpdate, load, openDepositPrompt, redirectToTradeLogin, token]);
+  }, [applyPositionUpdate, load, openDepositPrompt, redirectToTradeLogin, setPendingTradeAction, token]);
 
   useEffect(() => {
     const saved = localStorage.getItem("token");
@@ -429,13 +579,16 @@ export function TradeApp() {
   }, [load, redirectToTradeLogin]);
 
   useEffect(() => {
-    if (!token || !user?.is_demo) return;
-    const params = new URLSearchParams(location.search);
-    if (params.get("account") !== "real") return;
+    if (!token || !user || defaultRealAppliedRef.current) return;
+    defaultRealAppliedRef.current = true;
+    if (!user.is_demo) return;
     switchAccount(false).finally(() => {
-      history.replaceState(null, "", "/trade");
+      const params = new URLSearchParams(location.search);
+      params.delete("account");
+      const query = params.toString();
+      history.replaceState(null, "", query ? `/trade?${query}` : "/trade");
     });
-  }, [token, user?.is_demo]);
+  }, [token, user?.id, user?.is_demo]);
 
   useEffect(() => {
     if (!token) return;
@@ -464,23 +617,33 @@ export function TradeApp() {
         if (payload.type === "balance_update") setUser(payload.data);
         if (payload.type === "position_update") {
           applyPositionUpdate(payload.data);
+          if (pendingTradeActionRef.current?.mode === "manual") setPendingTradeAction(null);
           if (token) load(token).catch(() => undefined);
         }
         if (payload.type === "auth_success" && payload.data?.user) {
           setUser(payload.data.user);
-          if (payload.data.autoTrading !== undefined) setAutoSession(payload.data.autoTrading);
+          if (payload.data.autoTrading !== undefined) {
+            const session = payload.data.autoTrading;
+            setAutoSession(session);
+            setAutoControlDirection((current) => session?.active ? current ?? session.direction ?? null : null);
+          }
         }
         if (payload.type === "auto_trading_response" || payload.type === "auto_trading_update") {
           const session = payload.session ?? payload.data;
           setAutoSession(session ?? null);
+          const pendingAction = pendingTradeActionRef.current;
+          setAutoControlDirection((current) => session?.active ? pendingAction?.mode === "auto-start" ? pendingAction.direction : current ?? session.direction ?? null : null);
+          if (pendingAction?.mode !== "manual") setPendingTradeAction(null);
           if (session?.active) setMessage("Auto-trading is running");
           else if (session?.stopReason) setMessage(`Auto-trading stopped: ${String(session.stopReason).replaceAll("_", " ")}`);
           else setMessage(session ? "Auto-trading session updated" : "");
         }
         if (payload.type === "auth_error") redirectToTradeLogin();
-        if (payload.type === "error") {
-          const errorMessage = String(payload.data ?? "Trading request failed");
-          if (isInsufficientBalanceMessage(errorMessage)) openDepositPrompt(errorMessage);
+      if (payload.type === "error") {
+        const errorMessage = String(payload.data ?? "Trading request failed");
+        suppressNextEntrySoundRef.current = false;
+        setPendingTradeAction(null);
+        if (isInsufficientBalanceMessage(errorMessage)) openDepositPrompt(errorMessage);
           else setMessage(errorMessage);
         }
       };
@@ -493,7 +656,7 @@ export function TradeApp() {
       if (retry) clearTimeout(retry);
       wsRef.current?.close();
     };
-  }, [applyPositionUpdate, asset, load, openDepositPrompt, redirectToTradeLogin, token]);
+  }, [applyPositionUpdate, asset, load, openDepositPrompt, redirectToTradeLogin, setPendingTradeAction, token]);
 
   useEffect(() => {
     if (!token) return;
@@ -511,7 +674,10 @@ export function TradeApp() {
       if (data.tick) setTick(data.tick);
       (data.positions ?? []).forEach(applyPositionUpdate);
       if (data.user) setUser(data.user);
-      if (data.autoTrading !== undefined) setAutoSession(data.autoTrading);
+      if (data.autoTrading !== undefined) {
+        setAutoSession(data.autoTrading);
+        setAutoControlDirection((current) => data.autoTrading?.active ? current ?? data.autoTrading.direction ?? null : null);
+      }
       setStatus("connected");
     }
 
@@ -608,6 +774,10 @@ export function TradeApp() {
     if (!validateTradeFunds()) return;
     setMode("auto");
     setActiveWorkspace(isForexAsset(tradeAsset) ? "Forex" : "Bot");
+    setAutoControlDirection(direction);
+    setPendingTradeAction({ direction, mode: "auto-start" });
+    suppressNextEntrySoundRef.current = true;
+    playTradeSound("entry");
     sendTradeAction("auto_trading_start", buildTradeConfig(direction, tradeAsset));
     setMessage("Starting auto-trading...");
   }
@@ -615,6 +785,9 @@ export function TradeApp() {
   function stopAutoTrading(nextWorkspace: TradeWorkspace = "Spot") {
     setMode("manual");
     setActiveWorkspace(nextWorkspace);
+    setPendingTradeAction(null);
+    suppressNextEntrySoundRef.current = false;
+    setAutoControlDirection(null);
     if (autoSession?.active) {
       sendTradeAction("auto_trading_stop");
       setMessage("Stopping auto-trading...");
@@ -623,13 +796,27 @@ export function TradeApp() {
     }
   }
 
+  function stopAutoFromTradeButton(direction: Direction) {
+    setPendingTradeAction({ direction, mode: "auto-stop" });
+    sendTradeAction("auto_trading_stop");
+    setMessage("Stopping auto-trading...");
+  }
+
   function place(direction: Direction) {
+    const activeStopDirection = autoControlDirection ?? autoSession?.direction ?? null;
+    if (mode === "auto" && isAutoRunning && activeStopDirection === direction) {
+      stopAutoFromTradeButton(direction);
+      return;
+    }
     if (!validateTradeFunds()) return;
     const config = buildTradeConfig(direction);
     if (mode === "auto") {
       startAutoTrading(direction);
       return;
     }
+    setPendingTradeAction({ direction, mode: "manual" });
+    suppressNextEntrySoundRef.current = true;
+    playTradeSound("entry");
     sendTradeAction("manual_trade", config);
   }
 
@@ -715,10 +902,6 @@ export function TradeApp() {
     }
     setMessage(`AI loaded: ${assetLabel(config.asset)} ${directionLabel(config.direction, config.asset)}. Click Start to run.`);
     setAiOpen(false);
-  }
-
-  function updateForexLeverage(value: number) {
-    setForexLeverage(Math.max(1, Math.min(50, Math.round(Number(value) || 1))));
   }
 
   const isForexMode = activeWorkspace === "Forex";
@@ -885,18 +1068,9 @@ export function TradeApp() {
   }, [digitStats, selectedDigit]);
   const openPositions = positions.filter((position) => position.status === "open");
   const completedPositions = positions.filter((position) => position.status !== "open");
+  const sessionProfitLoss = Number(autoSession?.sessionPL ?? 0);
   const isAutoRunning = Boolean(autoSession?.active);
-  const showAutoPanel = mode === "auto" || isAutoRunning;
-  const activeAutoPosition = openPositions.find((position) =>
-    autoSession?.asset
-      ? position.asset === autoSession.asset && Boolean(position.is_demo) === Boolean(autoSession.isDemo)
-      : true,
-  );
-  const autoResults = completedPositions.filter((position) =>
-    autoSession?.asset
-      ? position.asset === autoSession.asset && Boolean(position.is_demo) === Boolean(autoSession.isDemo)
-      : true,
-  );
+  const activeAutoStopDirection = isAutoRunning ? autoControlDirection ?? autoSession?.direction ?? null : null;
   const movement = Number(tick?.movement ?? 0);
   const selectableAssets = isForexMode ? forexAssets : assets.filter((item) => !isForexAsset(item));
   const marketToggleTarget: TradeWorkspace = isForexMode ? "Spot" : "Forex";
@@ -904,6 +1078,20 @@ export function TradeApp() {
   const showDigitSelector = !isForexMode && contractGroup !== "evenOdd";
   const pricePrecision = isForexAsset(asset) ? asset.includes("jpy") ? 3 : 5 : 2;
   const formatActivePrice = (value: number | undefined) => typeof value === "number" ? value.toFixed(pricePrecision) : "-";
+  const tradeButtonLabel = (label: string, direction: Direction) => {
+    if (pendingTradeAction?.direction === direction) {
+      if (pendingTradeAction.mode === "manual") return "Starting trade";
+      if (pendingTradeAction.mode === "auto-stop") return "Stopping...";
+      return "Starting...";
+    }
+    if (mode === "auto") return activeAutoStopDirection === direction ? "Stop" : `Start ${label}`;
+    return label;
+  };
+  const isTradeButtonDisabled = (direction: Direction, disabled = false) => {
+    if (disabled) return true;
+    if (pendingTradeAction) return true;
+    return mode === "auto" && Boolean(activeAutoStopDirection) && activeAutoStopDirection !== direction;
+  };
 
   if (!user) {
     return <main className="trade-theme flex min-h-screen items-center justify-center bg-ink text-white" data-theme={themeMode}><div className="h-10 w-10 animate-spin rounded-full border-[3px] border-brand border-t-transparent" /></main>;
@@ -912,15 +1100,12 @@ export function TradeApp() {
   return (
     <main className="trade-theme min-h-screen overflow-x-hidden bg-[#0b0f16] text-white min-[600px]:flex min-[600px]:h-screen min-[600px]:flex-col min-[600px]:overflow-hidden" data-theme={themeMode}>
       <header className="sticky top-0 z-30 border-b border-white/10 bg-[#0b0f16]/95 backdrop-blur min-[600px]:shrink-0">
-        <div className="mx-auto grid max-w-[1500px] grid-cols-[auto_minmax(0,1fr)] items-center gap-2 px-3 py-2 sm:grid-cols-[auto_minmax(220px,1fr)_auto] sm:px-4">
+        <div className="mx-auto flex max-w-[1500px] items-center justify-between gap-2 px-3 py-2 sm:px-4">
           <div className="flex min-w-0 items-center gap-2">
             <Logo size="sm" />
             <span aria-label={status} title={status} className={`h-2.5 w-2.5 shrink-0 rounded-full ${status === "connected" ? "bg-emerald-400" : "bg-amber-300"}`} />
           </div>
-          <select value={asset} onChange={(event) => switchAsset(event.target.value)} className="field h-10 min-w-0 py-0 text-sm">
-            {selectableAssets.map((item) => <option key={item} value={item}>{assetLabel(item)}</option>)}
-          </select>
-          <div className="col-span-2 flex min-w-0 items-center justify-end gap-1.5 overflow-x-auto pb-1 min-[600px]:overflow-hidden sm:col-span-1 sm:pb-0">
+          <div className="flex min-w-0 items-center justify-end gap-1.5 overflow-x-auto pb-1 min-[600px]:overflow-hidden sm:pb-0">
             <div className="flex shrink-0 rounded-lg bg-white/5 p-1">
               <button onClick={() => switchAccount(true)} className={`rounded-md px-3 py-1.5 text-xs font-bold ${user.is_demo ? "bg-brand" : "text-gray-300 hover:bg-white/5"}`}>Demo</button>
               <button onClick={() => switchAccount(false)} className={`rounded-md px-3 py-1.5 text-xs font-bold ${!user.is_demo ? "bg-brand" : "text-gray-300 hover:bg-white/5"}`}>Real</button>
@@ -938,22 +1123,33 @@ export function TradeApp() {
             <button
               aria-label={`Switch to ${themeMode === "light" ? "dark" : "light"} theme`}
               title={`Switch to ${themeMode === "light" ? "dark" : "light"} theme`}
-              onClick={() => setThemeMode((current) => current === "light" ? "dark" : "light")}
+              onClick={() => setThemeMode((current) => {
+                const nextTheme = current === "light" ? "dark" : "light";
+                window.dispatchEvent(new CustomEvent<ThemeMode>("trade-theme-change", { detail: nextTheme }));
+                return nextTheme;
+              })}
               className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-white/5 text-gray-300 hover:bg-white/10"
             >
               {themeMode === "light" ? <Moon size={17} /> : <Sun size={17} />}
             </button>
-            <button aria-label="Live support" onClick={() => setChatOpen(true)} className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-white/5 hover:bg-white/10"><Headphones size={17} /></button>
+            <button
+              aria-label={audioEnabled ? "Turn trade audio off" : "Turn trade audio on"}
+              title={audioEnabled ? "Trade audio on" : "Trade audio off"}
+              onClick={toggleTradeAudio}
+              className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-white/5 hover:bg-white/10 ${audioEnabled ? "text-brand" : "text-gray-400"}`}
+            >
+              {audioEnabled ? <Volume2 size={17} /> : <VolumeX size={17} />}
+            </button>
             <button aria-label="Log out" onClick={() => { localStorage.removeItem("token"); location.href = "/login"; }} className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg hover:bg-white/5"><LogOut size={17} /></button>
           </div>
         </div>
       </header>
 
-      <div className="mx-auto grid w-full max-w-[1500px] grid-cols-1 gap-3 p-2 sm:p-4 min-[600px]:min-h-0 min-[600px]:flex-1 min-[600px]:grid-cols-[128px_minmax(0,1fr)_300px] min-[600px]:items-stretch min-[600px]:gap-1 min-[600px]:overflow-hidden min-[900px]:grid-cols-[220px_minmax(0,1fr)_360px] xl:grid-cols-[260px_minmax(0,1fr)_420px] xl:items-stretch 2xl:grid-cols-[300px_minmax(0,1fr)_440px]">
+      <div className="mx-auto grid w-full max-w-[1500px] grid-cols-1 gap-3 p-2 sm:p-3 min-[600px]:min-h-0 min-[600px]:flex-1 min-[600px]:grid-cols-[128px_minmax(0,1fr)_300px] min-[600px]:items-stretch min-[600px]:gap-1 min-[600px]:overflow-hidden min-[900px]:grid-cols-[220px_minmax(0,1fr)_360px] min-[900px]:p-2 xl:grid-cols-[260px_minmax(0,1fr)_420px] xl:items-stretch 2xl:grid-cols-[300px_minmax(0,1fr)_440px]">
         <section className="order-1 min-w-0 space-y-3 min-[600px]:order-2 min-[600px]:flex min-[600px]:h-full min-[600px]:flex-col min-[600px]:gap-2 min-[600px]:space-y-0 min-[600px]:overflow-hidden xl:col-start-2 xl:row-start-1">
           <div className="overflow-hidden rounded-lg border border-white/10 bg-[#0f141d] min-[600px]:flex min-[600px]:min-h-0 min-[600px]:flex-1 min-[600px]:flex-col">
             <div className="border-b border-white/10 p-3 min-[600px]:p-2 sm:p-4">
-              <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="grid gap-3 min-[900px]:grid-cols-[minmax(0,1fr)_minmax(190px,240px)] min-[900px]:items-start">
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
                     <h1 className="min-w-0 text-xl font-black sm:text-2xl">{assetLabel(asset)}</h1>
@@ -966,7 +1162,14 @@ export function TradeApp() {
                     <span className={chartChange >= 0 ? "text-emerald-400" : "text-rose-400"}>{chartChange >= 0 ? "+" : ""}{chartChange.toFixed(2)}%</span>
                   </div>
                 </div>
-                <div className="flex max-w-full gap-1 overflow-x-auto rounded-lg bg-white/5 p-1 min-[600px]:w-full min-[600px]:overflow-hidden">
+                <label className="relative block min-w-0">
+                  <span className="pointer-events-none absolute left-3 top-1.5 z-[1] text-[9px] font-black uppercase tracking-wide text-gray-500">{isForexMode ? "Currency" : "Volatility"}</span>
+                  <select value={asset} onChange={(event) => switchAsset(event.target.value)} className="field h-12 min-w-0 pb-1.5 pt-5 text-sm font-black">
+                    {selectableAssets.map((item) => <option key={item} value={item}>{assetLabel(item)}</option>)}
+                  </select>
+                </label>
+              </div>
+              <div className="mt-3 flex max-w-full gap-1 overflow-x-auto rounded-lg bg-white/5 p-1 min-[600px]:overflow-hidden">
                   {chartTimeframes.map((timeframe) => (
                     <button
                       key={timeframe}
@@ -977,7 +1180,6 @@ export function TradeApp() {
                       {timeframe}
                     </button>
                   ))}
-                </div>
               </div>
             </div>
 
@@ -1069,46 +1271,51 @@ export function TradeApp() {
 
         <aside className="order-2 min-w-0 space-y-3 min-[600px]:order-1 min-[600px]:flex min-[600px]:h-full min-[600px]:flex-col min-[600px]:space-y-2 min-[600px]:self-stretch min-[600px]:overflow-hidden xl:col-start-1 xl:row-start-1">
           <div className="hidden min-h-0 min-[600px]:block min-[600px]:flex-1 xl:block">
-            {showAutoPanel ? (
-              <AutoTradingPanel
-                session={autoSession}
-                openPosition={activeAutoPosition}
-                results={autoResults}
-                isForexMode={isForexMode}
-              />
-            ) : (
-              <ActivityPanel
-                activeTab={activityTab}
-                completedPositions={completedPositions}
-                openPositions={openPositions}
-                transactions={transactions}
-                setActiveTab={setActivityTab}
-              />
-            )}
+            <ActivityPanel
+              activeTab={activityTab}
+              completedPositions={completedPositions}
+              openPositions={openPositions}
+              transactions={transactions}
+              setActiveTab={setActivityTab}
+            />
+          </div>
+          {lastTradeOutcome && <TradeOutcomeCard key={lastTradeOutcome.id} outcome={lastTradeOutcome} />}
+          <div className="hidden shrink-0 rounded-lg border border-white/10 bg-[#0f141d] p-3 min-[600px]:grid min-[600px]:gap-2">
+            <div className="text-xs font-black uppercase tracking-wide text-gray-500">Session</div>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="min-w-0 rounded-lg bg-white/5 p-2">
+                <div className="truncate text-[10px] font-black uppercase tracking-wide text-gray-500">P/L</div>
+                <div className={`mt-1 truncate text-sm font-black ${sessionProfitLoss >= 0 ? "text-emerald-400" : "text-rose-400"}`}>{moneyLabel(sessionProfitLoss, true)}</div>
+              </div>
+              <div className="min-w-0 rounded-lg bg-white/5 p-2">
+                <div className="truncate text-[10px] font-black uppercase tracking-wide text-gray-500">Open</div>
+                <div className="mt-1 truncate text-sm font-black text-white">{openPositions.length}</div>
+              </div>
+            </div>
           </div>
         </aside>
 
         <aside className="order-3 min-w-0 min-[600px]:flex min-[600px]:h-full min-[600px]:self-stretch min-[600px]:overflow-hidden xl:col-start-3 xl:row-start-1">
           <div className="flex min-h-0 w-full flex-col rounded-lg border border-white/10 bg-[#0f141d] text-white shadow-xl shadow-black/20 min-[600px]:h-full">
-            <div className="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] items-center gap-2 border-b border-white/10 p-2 min-[900px]:p-3">
-              <button onClick={() => switchAccount(false)} className="flex min-w-0 items-center gap-1.5 rounded-xl border border-white/10 bg-white/5 p-1 text-left shadow-sm min-[900px]:gap-2 min-[900px]:p-1.5">
-                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-brand text-sm font-black text-ink min-[900px]:h-9 min-[900px]:w-9 min-[900px]:text-base">{user.is_demo ? "D" : "R"}</span>
+            <div className="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] items-center gap-1.5 border-b border-white/10 p-1.5 min-[900px]:p-2">
+              <button onClick={() => switchAccount(false)} className="flex min-w-0 items-center gap-1.5 rounded-xl border border-white/10 bg-white/5 p-1 text-left shadow-sm">
+                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-brand text-sm font-black text-ink">{user.is_demo ? "D" : "R"}</span>
                 <span className="min-w-0">
-                  <span className="block truncate text-base font-black text-brand min-[900px]:text-lg">${Number(user.active_balance).toFixed(2)}</span>
+                  <span className="block truncate text-base font-black text-brand">${Number(user.active_balance).toFixed(2)}</span>
                 </span>
-                <ChevronDown size={16} className="shrink-0 text-gray-400" />
+                <ChevronDown size={15} className="shrink-0 text-gray-400" />
               </button>
-              <button onClick={() => { setWalletSection("deposit"); setWalletOpen(true); }} className="h-10 rounded-xl bg-brand px-3 text-sm font-black text-ink shadow-lg shadow-brand/20 min-[900px]:h-11 min-[900px]:px-4 min-[900px]:text-base">Deposit</button>
-              <button aria-label="Open notifications" onClick={() => setChatOpen(true)} className="grid h-10 w-10 place-items-center rounded-full border border-white/10 bg-white/5 text-gray-300 hover:bg-white/10 min-[900px]:h-11 min-[900px]:w-11"><Bell size={20} /></button>
-              <button aria-label="Open profile" onClick={() => { location.href = "/settings"; }} className="grid h-10 w-10 place-items-center rounded-full border border-white/10 bg-white/5 text-gray-300 hover:bg-white/10 min-[900px]:h-11 min-[900px]:w-11"><CircleUserRound size={21} /></button>
+              <button onClick={() => { setWalletSection("deposit"); setWalletOpen(true); }} className="h-9 rounded-xl bg-brand px-3 text-sm font-black text-ink shadow-lg shadow-brand/20">Deposit</button>
+              <button aria-label="Open notifications" onClick={() => setChatOpen(true)} className="grid h-9 w-9 place-items-center rounded-full border border-white/10 bg-white/5 text-gray-300 hover:bg-white/10"><Bell size={18} /></button>
+              <button aria-label="Open profile" onClick={() => { location.href = "/settings"; }} className="grid h-9 w-9 place-items-center rounded-full border border-white/10 bg-white/5 text-gray-300 hover:bg-white/10"><CircleUserRound size={19} /></button>
             </div>
 
-            <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto overscroll-contain p-2 min-[900px]:gap-2 min-[900px]:p-3 xl:gap-3">
+            <div className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-hidden p-1.5 min-[900px]:p-2">
               <div>
-                <div className="mb-2 flex items-center justify-between gap-3">
-                  <h2 className="text-sm font-black uppercase tracking-wide text-gray-400">Mode</h2>
+                <div className="mb-1 flex items-center justify-between gap-3">
+                  <h2 className="text-xs font-black uppercase tracking-wide text-gray-400">Mode</h2>
                   <div className="flex items-center gap-2">
-                    <span className="text-xs font-semibold text-gray-500">
+                    <span className="text-[11px] font-semibold text-gray-500">
                       {isForexMode
                         ? mode === "auto" ? isAutoRunning ? "Running" : "Ready" : "Manual"
                         : mode === "auto" ? isAutoRunning ? "Running" : "Ready" : "Manual"}
@@ -1116,81 +1323,46 @@ export function TradeApp() {
                   </div>
                 </div>
                 <div className="grid grid-cols-2 overflow-hidden rounded-xl border border-white/10 bg-white/5 p-0.5">
-                  <button onClick={() => selectTradeMode("auto")} className={`rounded-lg px-3 py-2 text-sm font-black uppercase tracking-wide ${mode === "auto" ? "bg-brand text-ink shadow-sm" : "text-gray-300 hover:bg-white/5"}`}>Auto</button>
-                  <button onClick={() => selectTradeMode("manual")} className={`rounded-lg px-3 py-2 text-sm font-black uppercase tracking-wide ${mode === "manual" ? "bg-brand text-ink shadow-sm" : "text-gray-300 hover:bg-white/5"}`}>Manual</button>
+                  <button onClick={() => selectTradeMode("auto")} className={`rounded-lg px-3 py-1.5 text-xs font-black uppercase tracking-wide ${mode === "auto" ? "bg-brand text-ink shadow-sm" : "text-gray-300 hover:bg-white/5"}`}>Auto</button>
+                  <button onClick={() => selectTradeMode("manual")} className={`rounded-lg px-3 py-1.5 text-xs font-black uppercase tracking-wide ${mode === "manual" ? "bg-brand text-ink shadow-sm" : "text-gray-300 hover:bg-white/5"}`}>Manual</button>
                 </div>
-                {aiAppliedConfig && (
-                  <div className="mt-2 flex items-center justify-between gap-2 rounded-xl border border-brand/20 bg-brand/10 px-3 py-2 text-xs">
+                {aiAppliedConfig && !isForexAsset(aiAppliedConfig.asset) && (
+                  <div className="mt-1.5 flex items-center justify-between gap-2 rounded-xl border border-brand/20 bg-brand/10 px-2 py-1 text-[11px]">
                     <span className="truncate font-black text-brand">AI {directionLabel(aiAppliedConfig.direction, aiAppliedConfig.asset)}</span>
                     <span className="truncate font-semibold text-gray-400">{assetLabel(aiAppliedConfig.asset)} · {Math.round(aiAppliedConfig.confidence * 100)}%</span>
                   </div>
                 )}
               </div>
 
-              {isForexMode ? (
-                <div className="space-y-2">
-                  <div className="grid grid-cols-3 gap-1.5">
-                    <div className="rounded-xl border border-white/10 bg-white/5 p-2">
-                      <div className="text-[10px] font-black uppercase tracking-wide text-gray-500">Margin</div>
-                      <div className="mt-1 truncate font-black text-white">${stake.toFixed(2)}</div>
-                    </div>
-                    <div className="rounded-xl border border-white/10 bg-white/5 p-2">
-                      <div className="text-[10px] font-black uppercase tracking-wide text-gray-500">Leverage</div>
-                      <div className="mt-1 truncate font-black text-brand">{forexQuote.leverage}x</div>
-                    </div>
-                    <div className="rounded-xl border border-white/10 bg-white/5 p-2">
-                      <div className="text-[10px] font-black uppercase tracking-wide text-gray-500">Notional</div>
-                      <div className="mt-1 truncate font-black text-white">${forexQuote.notional.toFixed(2)}</div>
-                    </div>
-                  </div>
-                  <div>
-                    <div className="mb-1 flex items-center justify-between gap-2">
-                      <span className="text-xs font-black uppercase tracking-wide text-gray-400">Leverage</span>
-                      <span className="text-xs font-bold text-gray-500">1x-50x</span>
-                    </div>
-                    <div className="grid grid-cols-5 gap-1.5">
-                      {[5, 10, 20, 30, 50].map((value) => (
-                        <button
-                          key={value}
-                          type="button"
-                          onClick={() => updateForexLeverage(value)}
-                          className={`min-h-9 rounded-xl border text-xs font-black ${forexLeverage === value ? "border-brand bg-brand text-ink" : "border-white/10 bg-white/5 text-gray-400 hover:bg-white/10 hover:text-white"}`}
-                        >
-                          {value}x
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <div className="grid grid-cols-3 gap-2">
+              {!isForexMode && (
+                <div className="grid grid-cols-3 gap-1.5">
                   {([
                     ["evenOdd", "Even / Odd"],
                     ["matchDiffer", "Match / Differ"],
                     ["overUnder", "Over / Under"],
                   ] as const).map(([id, label]) => (
-                    <button key={id} onClick={() => selectContractGroup(id)} className={`min-h-10 rounded-xl border px-2 text-xs font-black ${contractGroup === id ? "border-brand bg-brand text-ink shadow-sm" : "border-white/10 bg-white/5 text-gray-400 hover:bg-white/10 hover:text-white"}`}>{label}</button>
+                    <button key={id} onClick={() => selectContractGroup(id)} className={`min-h-9 rounded-xl border px-1.5 text-[11px] font-black ${contractGroup === id ? "border-brand bg-brand text-ink shadow-sm" : "border-white/10 bg-white/5 text-gray-400 hover:bg-white/10 hover:text-white"}`}>{label}</button>
                   ))}
                 </div>
               )}
 
               <div>
-                <div className="mb-2 flex items-center justify-between gap-3">
-                  <h3 className="text-sm font-black uppercase tracking-wide text-gray-400">{isForexMode ? "Margin" : "Stake"}</h3>
+                <div className="mb-1 flex items-center justify-between gap-3">
+                  <h3 className="text-xs font-black uppercase tracking-wide text-gray-400">{isForexMode ? "Margin" : "Stake"}</h3>
                   {!isForexMode && (
-                    <div className="grid grid-cols-2 overflow-hidden rounded-lg border border-white/10 bg-white/5 text-sm font-black">
-                      <button onClick={() => setAmountMode("stake")} className={`px-3 py-1.5 ${amountMode === "stake" ? "bg-brand text-ink" : "text-gray-400"}`}>Stake</button>
-                      <button onClick={() => setAmountMode("payout")} className={`px-3 py-1.5 ${amountMode === "payout" ? "bg-brand text-ink" : "text-gray-400"}`}>Payout</button>
+                    <div className="grid grid-cols-2 overflow-hidden rounded-lg border border-white/10 bg-white/5 text-xs font-black">
+                      <button onClick={() => setAmountMode("stake")} className={`px-2.5 py-1 ${amountMode === "stake" ? "bg-brand text-ink" : "text-gray-400"}`}>Stake</button>
+                      <button onClick={() => setAmountMode("payout")} className={`px-2.5 py-1 ${amountMode === "payout" ? "bg-brand text-ink" : "text-gray-400"}`}>Payout</button>
                     </div>
                   )}
                 </div>
 
-                <div className="grid grid-cols-[42px_1fr_42px] items-center rounded-2xl border border-white/10 bg-[#0b0f16] p-2 min-[900px]:grid-cols-[44px_1fr_44px]">
-                  <button aria-label="Decrease amount" onClick={() => adjustTicketAmount(-1)} className="grid h-10 place-items-center rounded-xl text-brand"><Minus size={24} /></button>
+                <div className="grid grid-cols-[34px_1fr_34px] items-center rounded-2xl border border-white/10 bg-[#0b0f16] p-1 min-[900px]:grid-cols-[36px_1fr_36px]">
+                  <button aria-label="Decrease amount" onClick={() => adjustTicketAmount(-1)} className="grid h-8 place-items-center rounded-xl text-brand"><Minus size={21} /></button>
                   <label className="flex items-center justify-center gap-2 text-center">
-                    <span className="text-xl font-black text-brand">$</span>
+                    <span className="text-lg font-black text-brand">$</span>
                     <input
-                      className="w-20 bg-transparent text-center text-3xl font-black leading-none text-white outline-none min-[900px]:w-24"
+                      className="w-20 bg-transparent text-center text-xl font-black leading-none text-white outline-none min-[900px]:w-24"
                       type="number"
                       min="0.1"
                       step="0.1"
@@ -1199,54 +1371,28 @@ export function TradeApp() {
                       aria-label={isForexMode ? "Margin amount" : amountMode === "stake" ? "Stake amount" : "Payout amount"}
                     />
                   </label>
-                  <button aria-label="Increase amount" onClick={() => adjustTicketAmount(1)} className="grid h-10 place-items-center rounded-xl text-brand"><Plus size={24} /></button>
+                  <button aria-label="Increase amount" onClick={() => adjustTicketAmount(1)} className="grid h-8 place-items-center rounded-xl text-brand"><Plus size={21} /></button>
                 </div>
 
                 {mode === "manual" && (
                   <>
-                    <div className="mt-2 grid grid-cols-6 gap-1.5">
+                    <div className="mt-1.5 grid grid-cols-6 gap-1">
                       {quickStakeAmounts.map((amount) => (
-                        <button key={amount} type="button" onClick={() => { setAmountMode("stake"); setStake(amount); }} className={`min-h-9 rounded-xl border text-xs font-black ${stake === amount ? "border-brand bg-brand/15 text-brand" : "border-white/10 bg-white/5 text-gray-400 hover:bg-white/10 hover:text-white"}`}>${amount}</button>
+                        <button key={amount} type="button" onClick={() => { setAmountMode("stake"); setStake(amount); }} className={`min-h-7 rounded-lg border text-[11px] font-black ${stake === amount ? "border-brand bg-brand/15 text-brand" : "border-white/10 bg-white/5 text-gray-400 hover:bg-white/10 hover:text-white"}`}>${amount}</button>
                       ))}
                     </div>
 
-                    <div className="mt-2 flex items-center justify-between rounded-xl border border-white/10 bg-white/5 px-4 py-2">
-                      <span className="text-sm font-black text-gray-400">{isForexMode ? "Return" : "Payout"}</span>
-                      <span className="text-xl font-black text-white">${primaryPayout.toFixed(2)} <span className="text-xs font-black text-gray-500">USD</span></span>
+                    <div className="mt-1.5 flex items-center justify-between rounded-xl border border-white/10 bg-white/5 px-3 py-1.5">
+                      <span className="text-xs font-black text-gray-400">{isForexMode ? "Return" : "Payout"}</span>
+                      <span className="text-lg font-black text-white">${primaryPayout.toFixed(2)} <span className="text-[10px] font-black text-gray-500">USD</span></span>
                     </div>
                   </>
                 )}
-                {isForexMode ? (
-                  <div className="mt-2 rounded-xl border border-white/10 bg-white/5 p-2">
-                    <label className="block text-[11px] font-black uppercase tracking-wide text-gray-500" htmlFor="ticket-index-select">Pair</label>
-                    <select
-                      id="ticket-index-select"
-                      value={asset}
-                      onChange={(event) => switchAsset(event.target.value)}
-                      className="field mt-1 h-10 py-0 text-sm"
-                    >
-                      {selectableAssets.map((item) => <option key={item} value={item}>{assetLabel(item)}</option>)}
-                    </select>
-                  </div>
-                ) : (
-                  <div className="mt-2 rounded-xl border border-white/10 bg-white/5 p-2">
-                    <label className="block text-[11px] font-black uppercase tracking-wide text-gray-500" htmlFor="ticket-index-select">Index</label>
-                    <select
-                      id="ticket-index-select"
-                      value={asset}
-                      onChange={(event) => switchAsset(event.target.value)}
-                      className="field mt-1 h-10 py-0 text-sm"
-                    >
-                      {selectableAssets.map((item) => <option key={item} value={item}>{assetLabel(item)}</option>)}
-                    </select>
-                  </div>
-                )}
-
                 {showDigitSelector ? (
-                  <div className="mt-2 rounded-xl border border-white/10 bg-white/5 p-2">
-                    <div className="mb-2 flex items-center justify-between">
-                      <span className="text-[11px] font-black uppercase tracking-wide text-gray-500">Digit</span>
-                      <span className="text-xs font-black text-brand">D{selectedDigit}</span>
+                  <div className="mt-1.5 rounded-xl border border-white/10 bg-white/5 p-1.5">
+                    <div className="mb-1 flex items-center justify-between">
+                      <span className="text-[10px] font-black uppercase tracking-wide text-gray-500">Digit</span>
+                      <span className="text-[11px] font-black text-brand">D{selectedDigit}</span>
                     </div>
                     <div className="grid grid-cols-10 gap-1">
                       {digitOptions.map((digit) => (
@@ -1255,7 +1401,7 @@ export function TradeApp() {
                           type="button"
                           aria-pressed={selectedDigit === digit}
                           onClick={() => setSelectedDigit(digit)}
-                          className={`grid aspect-square min-h-7 place-items-center rounded-full border text-[11px] font-black ${selectedDigit === digit ? "border-brand bg-brand text-ink shadow-sm" : "border-white/10 bg-white/5 text-gray-300 hover:bg-white/10 hover:text-white"}`}
+                          className={`grid aspect-square min-h-6 place-items-center rounded-full border text-[10px] font-black ${selectedDigit === digit ? "border-brand bg-brand text-ink shadow-sm" : "border-white/10 bg-white/5 text-gray-300 hover:bg-white/10 hover:text-white"}`}
                         >
                           {digit}
                         </button>
@@ -1266,108 +1412,97 @@ export function TradeApp() {
               </div>
 
               {mode === "auto" && (
-                <div className="grid grid-cols-3 gap-1.5 min-[900px]:gap-2">
-                  <label className="rounded-xl border border-white/10 bg-white/5 p-2">
-                    <span className="mb-1 flex items-center gap-1 text-[11px] font-black uppercase tracking-wide text-emerald-500"><Target size={13} /> Profit</span>
-                    <span className="flex items-center gap-2 rounded-lg bg-black/20 px-2 py-1.5">
+                <div className="grid grid-cols-3 gap-1.5">
+                  <label className="rounded-xl border border-white/10 bg-white/5 p-1.5">
+                    <span className="mb-0.5 flex items-center gap-1 text-[10px] font-black uppercase tracking-wide text-emerald-500"><Target size={12} /> Profit</span>
+                    <span className="flex items-center gap-1.5 rounded-lg bg-black/20 px-2 py-1">
                       <span className="text-gray-500">$</span>
-                      <input className="w-full bg-transparent text-center text-lg font-black text-white outline-none" type="number" value={targetProfit} onChange={(e) => setTargetProfit(Number(e.target.value))} />
+                      <input className="w-full bg-transparent text-center text-base font-black text-white outline-none" type="number" value={targetProfit} onChange={(e) => setTargetProfit(Number(e.target.value))} />
                     </span>
                   </label>
-                  <label className="rounded-xl border border-white/10 bg-white/5 p-2">
-                    <span className="mb-1 flex items-center gap-1 text-[11px] font-black uppercase tracking-wide text-rose-500"><AlertTriangle size={13} /> Loss</span>
-                    <span className="flex items-center gap-2 rounded-lg bg-black/20 px-2 py-1.5">
+                  <label className="rounded-xl border border-white/10 bg-white/5 p-1.5">
+                    <span className="mb-0.5 flex items-center gap-1 text-[10px] font-black uppercase tracking-wide text-rose-500"><AlertTriangle size={12} /> Loss</span>
+                    <span className="flex items-center gap-1.5 rounded-lg bg-black/20 px-2 py-1">
                       <span className="text-gray-500">$</span>
-                      <input className="w-full bg-transparent text-center text-lg font-black text-white outline-none" type="number" value={targetLoss} onChange={(e) => setTargetLoss(Number(e.target.value))} />
+                      <input className="w-full bg-transparent text-center text-base font-black text-white outline-none" type="number" value={targetLoss} onChange={(e) => setTargetLoss(Number(e.target.value))} />
                     </span>
                   </label>
-                  <label className="rounded-xl border border-white/10 bg-white/5 p-2">
-                    <span className="mb-1 flex items-center gap-1 text-[11px] font-black uppercase tracking-wide text-amber-500"><TrendingUp size={13} /> Trades</span>
-                    <span className="flex items-center gap-2 rounded-lg bg-black/20 px-2 py-1.5">
+                  <label className="rounded-xl border border-white/10 bg-white/5 p-1.5">
+                    <span className="mb-0.5 flex items-center gap-1 text-[10px] font-black uppercase tracking-wide text-amber-500"><TrendingUp size={12} /> Trades</span>
+                    <span className="flex items-center gap-1.5 rounded-lg bg-black/20 px-2 py-1">
                       <span className="text-gray-500">#</span>
-                      <input className="w-full bg-transparent text-center text-lg font-black text-white outline-none" type="number" value={maxTrades} onChange={(e) => setMaxTrades(Number(e.target.value))} />
+                      <input className="w-full bg-transparent text-center text-base font-black text-white outline-none" type="number" value={maxTrades} onChange={(e) => setMaxTrades(Number(e.target.value))} />
                     </span>
                   </label>
                 </div>
               )}
 
               {isForexMode ? (
-                <div className="mt-auto grid gap-2 border-t border-white/10 pt-2">
-                  <div className="grid grid-cols-2 gap-2">
+                <div className="mt-auto grid gap-1.5 border-t border-white/10 pt-1.5">
+                  <div className="grid grid-cols-2 gap-1.5">
                     {([
                       { direction: "over" as Direction, label: "Buy", icon: ArrowUp, tone: "emerald" as const },
                       { direction: "under" as Direction, label: "Sell", icon: ArrowDown, tone: "rose" as const },
                     ]).map((action) => {
                       const Icon = action.icon;
                       const isBuy = action.tone === "emerald";
-                      const label = mode === "auto" ? isAutoRunning ? `Restart ${action.label}` : `Start ${action.label}` : action.label;
+                      const label = tradeButtonLabel(action.label, action.direction);
                       return (
                         <button
                           key={action.direction}
+                          disabled={isTradeButtonDisabled(action.direction)}
                           onClick={() => place(action.direction)}
-                          className={`min-h-20 rounded-2xl border p-3 text-left font-black text-white ${isBuy ? "border-emerald-400/35 bg-emerald-400/10" : "border-rose-400/35 bg-rose-400/10"}`}
+                          className={`min-h-12 rounded-2xl border p-2 text-left font-black text-white disabled:cursor-not-allowed disabled:opacity-50 ${isBuy ? "border-emerald-400/35 bg-emerald-400/10" : "border-rose-400/35 bg-rose-400/10"}`}
                         >
-                          <span className="mb-2 flex items-center gap-2">
-                            <Icon className={isBuy ? "text-emerald-400" : "text-rose-400"} size={20} />
+                          <span className="mb-1 flex items-center gap-2 text-sm">
+                            <Icon className={isBuy ? "text-emerald-400" : "text-rose-400"} size={18} />
                             <span>{label}</span>
                           </span>
-                          <span className="block text-right text-xs text-gray-400">{forexQuote.leverage}x</span>
-                          <span className="block text-right text-xs text-gray-400">${forexQuote.notional.toFixed(2)}</span>
-                          <span className="block text-right text-xs text-gray-400">+${forexProfit.toFixed(2)}</span>
+                          <span className="block text-right text-[11px] text-gray-400">${forexQuote.notional.toFixed(2)}</span>
+                          <span className="block text-right text-[11px] text-gray-400">+${forexProfit.toFixed(2)}</span>
                         </button>
                       );
                     })}
                   </div>
                 </div>
               ) : (
-                <div className="mt-auto grid gap-2 border-t border-white/10 pt-2">
+                <div className="mt-auto grid gap-1.5 border-t border-white/10 pt-1.5">
                   {contractActions.map((action) => {
                     const Icon = action.icon;
                     const profitPercent = stake > 0 ? ((action.payout / stake - 1) * 100).toFixed(2) : "0.00";
                     const isGreen = action.tone === "green";
-                    const actionLabel = mode === "auto" && !isAutoRunning ? `Start ${action.label}` : action.label;
+                    const actionLabel = tradeButtonLabel(action.label, action.direction);
                     return (
                       <button
                         key={action.direction}
-                        disabled={action.disabled}
+                        disabled={isTradeButtonDisabled(action.direction, action.disabled)}
                         onClick={() => place(action.direction)}
-                        className={`grid min-h-12 grid-cols-[40px_1fr_auto] items-center gap-2 rounded-xl border p-2 text-left disabled:cursor-not-allowed disabled:opacity-50 min-[900px]:min-h-14 ${isGreen ? "border-emerald-400/35 bg-emerald-400/10 text-emerald-400" : "border-rose-400/35 bg-rose-400/10 text-rose-400"}`}
+                        className={`grid min-h-11 grid-cols-[34px_1fr_auto] items-center gap-2 rounded-xl border p-1.5 text-left disabled:cursor-not-allowed disabled:opacity-50 ${isGreen ? "border-emerald-400/35 bg-emerald-400/10 text-emerald-400" : "border-rose-400/35 bg-rose-400/10 text-rose-400"}`}
                       >
-                        <span className={`grid h-9 w-9 place-items-center rounded-lg ${isGreen ? "bg-emerald-400/15" : "bg-rose-400/15"}`}><Icon size={21} /></span>
-                        <span className="text-base font-black text-white">{actionLabel}</span>
+                        <span className={`grid h-8 w-8 place-items-center rounded-lg ${isGreen ? "bg-emerald-400/15" : "bg-rose-400/15"}`}><Icon size={19} /></span>
+                        <span className="text-sm font-black text-white">{actionLabel}</span>
                         <span className="text-right">
-                          <span className="block text-xs font-black text-gray-300">${action.payout.toFixed(2)} USD</span>
-                          <span className={`block text-sm font-black ${isGreen ? "text-emerald-500" : "text-rose-500"}`}>{profitPercent}%</span>
+                          <span className="block text-[11px] font-black text-gray-300">${action.payout.toFixed(2)} USD</span>
+                          <span className={`block text-xs font-black ${isGreen ? "text-emerald-500" : "text-rose-500"}`}>{profitPercent}%</span>
                         </span>
                       </button>
                     );
                   })}
                 </div>
               )}
-
-              {mode === "auto" && <button onClick={() => stopAutoTrading()} className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-white/10 px-4 py-1.5 font-black text-gray-300 hover:bg-white/5"><Bot size={16} /> {isAutoRunning ? "Stop Auto-Trading" : "Back to Manual"}</button>}
-              {message && <div className="rounded-xl border border-brand/20 bg-brand/10 p-3 text-sm font-semibold text-gray-200">{message}</div>}
+              {message && <div className="max-h-10 overflow-hidden rounded-xl border border-brand/20 bg-brand/10 p-2 text-xs font-semibold leading-tight text-gray-200">{message}</div>}
             </div>
           </div>
         </aside>
 
         <section className="order-4 min-w-0 min-[600px]:hidden">
-          {showAutoPanel ? (
-            <AutoTradingPanel
-              session={autoSession}
-              openPosition={activeAutoPosition}
-              results={autoResults}
-              isForexMode={isForexMode}
-            />
-          ) : (
-            <ActivityPanel
-              activeTab={activityTab}
-              completedPositions={completedPositions}
-              openPositions={openPositions}
-              transactions={transactions}
-              setActiveTab={setActivityTab}
-            />
-          )}
+          <ActivityPanel
+            activeTab={activityTab}
+            completedPositions={completedPositions}
+            openPositions={openPositions}
+            transactions={transactions}
+            setActiveTab={setActivityTab}
+          />
         </section>
       </div>
 
@@ -1546,143 +1681,23 @@ function AiMetric({ label, value }: { label: string; value: string | number }) {
   );
 }
 
-function AutoTradingPanel({ session, openPosition, results, isForexMode = false }: { session: AutoSession | null; openPosition?: any; results: any[]; isForexMode?: boolean }) {
-  const isActive = Boolean(session?.active);
-  const isForexSession = isForexMode || session?.tradeType === "forex" || openPosition?.trade_type === "forex";
-  const sessionPL = Number(session?.sessionPL ?? 0);
-  const tradesCount = Number(session?.tradesCount ?? 0);
-  const winsCount = Number(session?.winsCount ?? 0);
-  const lossesCount = Number(session?.lossesCount ?? 0);
-  const currentResult = openPosition ?? results[0] ?? null;
-  const isCurrentOpen = Boolean(openPosition);
-  const currentResultState = isCurrentOpen ? "Current open" : currentResult ? "Current closed" : "";
-  const statusText = currentResultState || (isActive ? "Scanning" : session?.stopReason ? String(session.stopReason).replaceAll("_", " ") : "Ready");
-  const currentStake = Number(session?.currentStake ?? openPosition?.stake ?? 0);
-  const maxTradesValue = Number(session?.maxTrades ?? 0);
-
+function TradeOutcomeCard({ outcome }: { outcome: TradeOutcome }) {
+  const isProfit = outcome.profitLoss >= 0;
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-white/10 bg-[#0f141d] p-2 text-[11px] sm:p-3 min-[900px]:text-xs">
-      <div className="mb-2 flex items-center justify-between gap-2">
+    <div className={`trade-outcome-slide-card hidden shrink-0 rounded-lg border p-3 shadow-lg shadow-black/20 min-[600px]:block ${isProfit ? "border-emerald-400/35 bg-emerald-400/10" : "border-rose-400/35 bg-rose-400/10"}`}>
+      <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <h2 className="truncate font-black">{isForexSession ? "Forex Auto" : "Auto Trading"}</h2>
-          <div className="mt-0.5 truncate text-[10px] font-semibold text-gray-500">{isActive ? isForexSession ? "Trend" : session?.strategy === "smart" ? "Smart" : "Bot" : "Ready"}</div>
+          <div className="text-[10px] font-black uppercase tracking-wide text-gray-500">Last trade</div>
+          <div className="mt-1 truncate text-sm font-black text-white">{assetLabel(outcome.asset)}</div>
+          <div className="mt-0.5 truncate text-[11px] font-semibold text-gray-400">{outcome.detail}</div>
         </div>
-        <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-black ${isActive ? "bg-emerald-400/15 text-emerald-400" : "bg-white/5 text-gray-400"}`}>
-          {isActive ? "ON" : "OFF"}
-        </span>
-      </div>
-
-      <div key={currentResult?.id ?? statusText} className="auto-trade-slide-card rounded-xl border border-brand/25 bg-brand/10 p-2 shadow-lg shadow-black/20 min-[900px]:p-3">
-        <div className="relative z-[1]">
-          <div className="mb-2 flex items-center justify-between gap-2">
-            <span className="truncate text-[10px] font-black uppercase tracking-wide text-brand">Current Result</span>
-            <span className="rounded-full bg-black/25 px-2 py-0.5 text-[10px] font-black text-gray-300">{statusText}</span>
-          </div>
-          {currentResult ? (
-            <>
-              <div className="truncate text-sm font-black text-white min-[900px]:text-base">{assetLabel(currentResult.asset)}</div>
-              <div className="mt-1 text-lg font-black text-brand min-[900px]:text-2xl">{tradeSideLabel(currentResult)}</div>
-              <div className="mt-2 grid gap-1">
-                <TradeDetail label="Status" value={isCurrentOpen ? "Open" : "Closed"} />
-                <TradeDetail label="Stake" value={`$${Number(currentResult.stake ?? 0).toFixed(2)}`} />
-                <TradeDetail label="Payout" value={`$${Number(currentResult.potential_payout ?? 0).toFixed(2)}`} />
-                <TradeDetail label="Entry" value={formatEntry(currentResult)} />
-                {isCurrentOpen ? (
-                  <>
-                    <TradeDetail label="Progress" value={`${Number(currentResult.current_tick ?? 0)}/${Number(currentResult.ticks ?? 0)}`} />
-                    <TradeDetail label="Digit" value={currentResult.trade_type === "forex" ? "Price" : String(currentResult.selected_digit ?? "-")} />
-                  </>
-                ) : (
-                  <>
-                    <TradeDetail label="Result" value={currentResult.status === "won" ? "Won" : "Lost"} />
-                    <TradeDetail label="Exit" value={formatExit(currentResult)} />
-                  </>
-                )}
-              </div>
-            </>
-          ) : (
-            <div className="rounded-lg bg-black/20 p-2 text-gray-300">
-              <div className="font-bold">{isActive ? "Waiting" : "Ready"}</div>
-              <div className="mt-1 text-[10px] leading-relaxed text-gray-500">{isActive ? "Next entry pending." : "Start from ticket."}</div>
-            </div>
-          )}
+        <div className={`shrink-0 text-right text-lg font-black ${isProfit ? "text-emerald-400" : "text-rose-400"}`}>
+          {moneyLabel(outcome.profitLoss, true)}
+          <div className="text-[10px] font-black uppercase tracking-wide text-gray-500">{isProfit ? "Profit" : "Loss"}</div>
         </div>
       </div>
-
-      <section className="mt-2 rounded-xl bg-white/5 p-2">
-        <div className="mb-2 flex items-center justify-between">
-          <h3 className="font-black">Closed</h3>
-          <span className="text-[10px] font-bold text-gray-500">{results.length} closed</span>
-        </div>
-        <div className="space-y-1">
-          {results.slice(0, 3).map((position, index) => <AutoResultRow key={position.id} position={position} isCurrent={!openPosition && index === 0} />)}
-          {results.length === 0 && <div className="rounded-lg bg-black/20 p-2 text-[10px] leading-relaxed text-gray-400">No closed trades.</div>}
-        </div>
-      </section>
-
-      <section className="mt-auto rounded-xl border border-white/10 bg-[#0b0f16] p-2">
-        <div className="text-[10px] font-black uppercase tracking-wide text-gray-500">P/L</div>
-        <div className={`mt-1 text-2xl font-black ${sessionPL >= 0 ? "text-emerald-400" : "text-rose-400"}`}>{sessionPL >= 0 ? "+" : ""}${sessionPL.toFixed(2)}</div>
-        <div className="mt-2 grid grid-cols-3 gap-1 text-center text-[10px]">
-          <SessionMetric label="Wins" value={winsCount} tone="text-emerald-400" />
-          <SessionMetric label="Losses" value={lossesCount} tone="text-rose-400" />
-          <SessionMetric label="Next" value={`$${currentStake.toFixed(2)}`} tone="text-brand" />
-        </div>
-        <div className="mt-2 flex items-center justify-between gap-2 text-[10px] text-gray-500">
-          <span>Target ${Number(session?.targetProfit ?? 0).toFixed(0)}</span>
-          <span>{maxTradesValue ? `${tradesCount}/${maxTradesValue}` : `${tradesCount}`}</span>
-        </div>
-      </section>
     </div>
   );
-}
-
-function TradeDetail({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-center justify-between gap-2 rounded-lg bg-black/20 px-2 py-1">
-      <span className="text-[10px] text-gray-500">{label}</span>
-      <span className="truncate font-black text-gray-100">{value}</span>
-    </div>
-  );
-}
-
-function AutoResultRow({ position, isCurrent = false }: { position: any; isCurrent?: boolean }) {
-  const profitLoss = Number(position.profit_loss ?? 0);
-  const stateLabel = isCurrent ? "Current closed" : "Closed";
-  return (
-    <div className="grid grid-cols-[1fr_auto] gap-2 rounded-lg bg-black/20 p-2">
-      <div className="min-w-0">
-        <div className="truncate font-bold">{tradeSideLabel(position)}</div>
-        <div className="mt-0.5 text-[10px] text-gray-500">{stateLabel} - {position.status === "won" ? "Won" : "Lost"} - {formatExit(position)}</div>
-      </div>
-      <div className={`text-right font-black ${profitLoss >= 0 ? "text-emerald-400" : "text-rose-400"}`}>{profitLoss >= 0 ? "+" : ""}{profitLoss.toFixed(2)}</div>
-    </div>
-  );
-}
-
-function SessionMetric({ label, value, tone }: { label: string; value: string | number; tone: string }) {
-  return (
-    <div className="rounded-lg bg-white/5 px-1.5 py-1">
-      <div className={`font-black ${tone}`}>{value}</div>
-      <div className="text-gray-500">{label}</div>
-    </div>
-  );
-}
-
-function tradeSideLabel(position: any) {
-  const direction = String(position?.direction ?? "").toUpperCase();
-  if (position?.trade_type === "forex" || position?.trade_type === "futures") return direction === "OVER" ? "BUY" : "SELL";
-  return direction || "-";
-}
-
-function formatEntry(position: any) {
-  if (position?.trade_type === "forex" || position?.trade_type === "futures") return Number(position.entry_price ?? 0).toFixed(5);
-  return `D${position.entry_digit ?? "-"}`;
-}
-
-function formatExit(position: any) {
-  if (position?.trade_type === "forex" || position?.trade_type === "futures") return Number(position.exit_price ?? 0).toFixed(5);
-  return `exit ${position.exit_digit ?? "-"}`;
 }
 
 function ActivityPanel({ activeTab, completedPositions, openPositions, transactions, setActiveTab }: { activeTab: ActivityTab; completedPositions: any[]; openPositions: any[]; transactions: any[]; setActiveTab: (tab: ActivityTab) => void }) {
@@ -1756,6 +1771,13 @@ function PositionRow({ position }: { position: any }) {
   const stake = Number(position.stake ?? 0);
   const profitLoss = Number(position.profit_loss ?? 0);
   const payout = Number(position.potential_payout ?? 0);
+  const isWinningResult = !isOpen && (position.status === "won" || profitLoss > 0);
+  const rowTone = isOpen
+    ? "border-amber-300/40 bg-amber-300/10 ring-1 ring-inset ring-amber-300/25"
+    : isWinningResult
+      ? "border-emerald-400/40 bg-emerald-400/10 ring-1 ring-inset ring-emerald-400/25"
+      : "border-rose-400/40 bg-rose-400/10 ring-1 ring-inset ring-rose-400/25";
+  const plTone = isOpen ? "text-amber-300" : isWinningResult ? "text-emerald-400" : "text-rose-400";
   const value = contractValue(stake, profitLoss, isOpen);
   const detail = isForex
     ? `${side} forex - ${position.current_tick}/${position.ticks}s`
@@ -1763,20 +1785,20 @@ function PositionRow({ position }: { position: any }) {
       ? `${side} - ${position.current_tick}/${position.ticks}s`
       : `${side} - digit ${position.selected_digit} - ${position.current_tick}/${position.ticks}s`;
   return (
-    <div className="rounded-xl bg-white/5 p-3 text-xs">
+    <div className={`rounded-xl border p-3 text-xs ${rowTone}`}>
       <div className="grid grid-cols-[1fr_auto] gap-2">
         <div className="min-w-0">
           <div className="truncate font-bold">{assetLabel(position.asset)}</div>
           <div className="mt-1 truncate text-gray-500">{detail}</div>
         </div>
-        <div className={`text-right font-black ${isOpen ? "text-amber-300" : profitLoss >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+        <div className={`text-right font-black ${plTone}`}>
           {isOpen ? "OPEN" : moneyLabel(profitLoss, true)}
           {!isOpen && <div className="text-[10px] text-white/50">{isForex ? `closed - exit ${Number(position.exit_price ?? 0).toFixed(5)}` : `closed - exit ${position.exit_digit}`}</div>}
         </div>
       </div>
       <div className="mt-2 grid grid-cols-1 gap-1.5 min-[900px]:grid-cols-2">
         <ActivityMetric label="Stake" value={moneyLabel(stake)} />
-        <ActivityMetric label="Total P/L" compactLabel="P/L" value={moneyLabel(profitLoss, true)} tone={profitLoss >= 0 ? "text-emerald-400" : "text-rose-400"} />
+        <ActivityMetric label="Total P/L" compactLabel="P/L" value={moneyLabel(profitLoss, true)} tone={plTone} />
         <ActivityMetric label="Contract Value" compactLabel="Contract" value={moneyLabel(value)} />
         <ActivityMetric label="Potential Payout" compactLabel="Payout" value={moneyLabel(payout)} />
       </div>

@@ -42,8 +42,9 @@ export async function POST(request: NextRequest, context: { params: Promise<{ pa
     if (path === "login") {
       const user = getUserByEmail(String(body.email ?? ""));
       if (!user || !verifyPassword(String(body.password ?? ""), user.password_hash)) return error("Invalid email or password", 401);
-      const token = signToken({ id: user.id, email: user.email, username: user.username, kind: "user", pending2FA: false });
-      return json({ user: publicUser(user), token });
+      const realModeUser = setRealTradeMode(user.id);
+      const token = signToken({ id: realModeUser.id, email: realModeUser.email, username: realModeUser.username, kind: "user", pending2FA: false });
+      return json({ user: publicUser(realModeUser), token });
     }
 
     if (path === "login/verify-2fa") {
@@ -61,7 +62,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ pa
       const id = randomUUID();
       db.prepare(`
         INSERT INTO users (id, email, username, password_hash, balance, real_balance, demo_balance, is_demo, referral_code, referred_by, trc20_address)
-        VALUES (?, ?, ?, ?, 10000, 0, 10000, 1, ?, ?, ?)
+        VALUES (?, ?, ?, ?, 0, 0, 10000, 0, ?, ?, ?)
       `).run(id, email, username, hashPassword(password), referralCode(), body.referralCode ? String(body.referralCode) : null, trc20Address());
       const user = getUserById(id)!;
       return json({ user: publicUser(user), token: signToken({ id: user.id, email: user.email, username: user.username, kind: "user" }) }, 201);
@@ -155,6 +156,11 @@ async function handlePaystackWebhook(request: NextRequest) {
     failureReason: data.gateway_response ? String(data.gateway_response) : "Paystack payment was not successful",
   });
   return json({ success: true, ...result });
+}
+
+function setRealTradeMode(userId: string) {
+  db.prepare("UPDATE users SET is_demo = 0, balance = real_balance WHERE id = ?").run(userId);
+  return getUserById(userId)!;
 }
 
 function createDemoUser() {

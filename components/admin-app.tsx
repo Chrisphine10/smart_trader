@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { ArrowLeftRight, BarChart3, Banknote, Bot, CreditCard, LogOut, MessageCircle, Save, Send, Shield, Smartphone, Users, Wallet } from "lucide-react";
 import { Logo } from "./logo";
+import { PublicThemeShell } from "./public-theme-shell";
+import { PublicThemeToggle } from "./public-theme-toggle";
 
 export function AdminApp() {
   const [stats, setStats] = useState<any>(null);
@@ -176,14 +178,16 @@ export function AdminApp() {
     await loadP2pDisputes();
   }
 
-  if (!stats) return <main className="flex min-h-screen items-center justify-center bg-ink text-white"><div className="h-10 w-10 animate-spin rounded-full border-[3px] border-brand border-t-transparent" /></main>;
+  if (!stats) return <PublicThemeShell><div className="flex min-h-screen items-center justify-center bg-ink text-white"><div className="h-10 w-10 animate-spin rounded-full border-[3px] border-brand border-t-transparent" /></div></PublicThemeShell>;
 
   return (
-    <main className="min-h-screen bg-ink text-white">
+    <PublicThemeShell>
+    <div className="min-h-screen bg-ink text-white">
       <header className="border-b border-white/10 bg-panel">
         <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-5">
           <Logo label="Hydra Trade Admin" size="sm" />
           <div className="flex items-center gap-3">
+            <PublicThemeToggle />
             <span className="text-sm text-gray-400">{admin?.name}</span>
             <button onClick={() => { localStorage.removeItem("adminToken"); location.href = "/admin/login"; }} className="rounded-lg p-2 hover:bg-white/5"><LogOut size={18} /></button>
           </div>
@@ -277,7 +281,8 @@ export function AdminApp() {
         {tab === "kyc" && <KycPanel submissions={kycSubmissions} notes={kycNotes} setNotes={setKycNotes} onRefresh={() => loadKyc()} onReview={reviewKyc} />}
         {tab === "risk" && <RiskPanel settings={riskSettings} onChange={updateRisk} onSave={saveRiskSettings} notice={notice} />}
       </div>
-    </main>
+    </div>
+    </PublicThemeShell>
   );
 }
 

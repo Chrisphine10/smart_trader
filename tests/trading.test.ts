@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { db, hashPassword, migrate, referralCode, trc20Address, type User } from "../lib/db";
-import { calculateEscrowSplit, maybeCreateAutoTrade, startAutoSession } from "../lib/repositories";
-import { chooseSmartDigitContract, payoutMultiplier, potentialPayout, resolveDigitTrade } from "../lib/trading";
+import { calculateEscrowSplit, createManualTrade, maybeCreateAutoTrade, settleOpenPositions, startAutoSession } from "../lib/repositories";
+import { chooseSmartDigitContract, payoutMultiplier, potentialPayout, resolveDigitTrade, type Direction } from "../lib/trading";
 
 function createTradingUser(label: string): User {
   const id = crypto.randomUUID();
@@ -44,6 +44,101 @@ describe("trading math", () => {
   it("splits winning payouts into user net and system escrow", () => {
     expect(calculateEscrowSplit(180, 10)).toEqual({ escrowFee: 18, netPayout: 162 });
     expect(calculateEscrowSplit(99.99, 10)).toEqual({ escrowFee: 10, netPayout: 89.99 });
+    expect(calculateEscrowSplit(10.55, 10, 0.55)).toEqual({ escrowFee: 0.06, netPayout: 10.49 });
+  });
+
+  it("settles wins with a balanced gross payout and escrow fee ledger", () => {
+    const user = createTradingUser("ledger-win");
+    const position = createManualTrade(user, {
+      asset: "volatility_10_1s",
+      direction: "over",
+      stake: 25,
+      selectedDigit: 5,
+      isDemo: false,
+      durationTicks: 1,
+    }, {
+      asset: "volatility_10_1s",
+      price: 100,
+      lastDigit: 5,
+      sequence: 1,
+      timestamp: new Date(2026, 0, 1, 0, 0, 0).toISOString(),
+    }) as Record<string, unknown>;
+
+    expect(position.potential_payout).toBe(59.38);
+
+    const [closed] = settleOpenPositions(user.id, "volatility_10_1s", {
+      asset: "volatility_10_1s",
+      price: 101,
+      lastDigit: 7,
+      sequence: 2,
+      timestamp: new Date(2026, 0, 1, 0, 0, 1).toISOString(),
+    });
+
+    expect(closed).toMatchObject({ status: "won", profit_loss: 30.94, balance_after: 1030.94 });
+    const transactions = db.prepare("SELECT type, amount FROM transactions WHERE user_id = ?").all(user.id) as Array<{ type: string; amount: number }>;
+    expect(transactions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "stake", amount: -25 }),
+      expect.objectContaining({ type: "payout", amount: 59.38 }),
+      expect.objectContaining({ type: "system_escrow_fee", amount: -3.44 }),
+    ]));
+    const amountSum = transactions.reduce((sum, transaction) => Math.round((sum + transaction.amount) * 100) / 100, 0);
+    expect(amountSum).toBe(30.94);
+  });
+
+  it("keeps low-payout differ wins profitable after escrow and rejects invalid trade input", () => {
+    const user = createTradingUser("differ-win");
+    createManualTrade(user, {
+      asset: "volatility_10_1s",
+      direction: "differ",
+      stake: 10,
+      selectedDigit: 5,
+      isDemo: false,
+      durationTicks: 1,
+    }, {
+      asset: "volatility_10_1s",
+      price: 100,
+      lastDigit: 5,
+      sequence: 1,
+      timestamp: new Date(2026, 0, 1, 0, 0, 0).toISOString(),
+    });
+
+    const [closed] = settleOpenPositions(user.id, "volatility_10_1s", {
+      asset: "volatility_10_1s",
+      price: 101,
+      lastDigit: 7,
+      sequence: 2,
+      timestamp: new Date(2026, 0, 1, 0, 0, 1).toISOString(),
+    });
+
+    expect(closed).toMatchObject({ status: "won", profit_loss: 0.49, balance_after: 1000.49 });
+    expect(() => createManualTrade(user, {
+      asset: "volatility_10_1s",
+      direction: "differ",
+      stake: 10,
+      selectedDigit: 99,
+      isDemo: false,
+      durationTicks: 1,
+    }, {
+      asset: "volatility_10_1s",
+      price: 100,
+      lastDigit: 5,
+      sequence: 1,
+      timestamp: new Date(2026, 0, 1, 0, 0, 0).toISOString(),
+    })).toThrow("Selected digit");
+    expect(() => createManualTrade(user, {
+      asset: "volatility_10_1s",
+      direction: "sideways" as Direction,
+      stake: 10,
+      selectedDigit: 5,
+      isDemo: false,
+      durationTicks: 1,
+    }, {
+      asset: "volatility_10_1s",
+      price: 100,
+      lastDigit: 5,
+      sequence: 1,
+      timestamp: new Date(2026, 0, 1, 0, 0, 0).toISOString(),
+    })).toThrow("Unsupported trade direction");
   });
 
   it("replaces an active real auto session and keeps even/odd trade metadata", () => {

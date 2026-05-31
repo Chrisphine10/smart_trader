@@ -44,10 +44,34 @@ textarea {
   }
 }
 
+@keyframes tradeOutcomeSlideAcross {
+  0% {
+    opacity: 0;
+    transform: translateX(-110%);
+  }
+  8% {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  82% {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(110%);
+  }
+}
+
 .auto-trade-slide-card {
   position: relative;
   overflow: hidden;
   animation: autoTradeSlideIn 420ms ease-out both;
+}
+
+.trade-outcome-slide-card {
+  will-change: transform, opacity;
+  animation: tradeOutcomeSlideAcross 8.8s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 .auto-trade-slide-card::after {
@@ -197,7 +221,8 @@ textarea {
 }
 
 .trade-theme [class~="bg-ink/80"],
-.trade-theme [class~="bg-ink/85"] {
+.trade-theme [class~="bg-ink/85"],
+.trade-theme [class*="bg-ink/"] {
   background-color: var(--trade-popover) !important;
 }
 
@@ -207,7 +232,8 @@ textarea {
 }
 
 .trade-theme [class~="bg-panel/60"],
-.trade-theme [class~="bg-panel/70"] {
+.trade-theme [class~="bg-panel/70"],
+.trade-theme [class*="bg-panel/"] {
   background-color: var(--trade-panel) !important;
 }
 
@@ -224,16 +250,19 @@ textarea {
   background-color: var(--trade-control) !important;
 }
 
-.trade-theme [class~="bg-white/10"] {
+.trade-theme [class~="bg-white/10"],
+.trade-theme [class~="bg-white/20"] {
   background-color: var(--trade-control-hover) !important;
 }
 
+.trade-theme [class~="bg-black/15"],
 .trade-theme [class~="bg-black/20"],
 .trade-theme [class~="bg-black/25"] {
   background-color: var(--trade-subpanel) !important;
 }
 
-.trade-theme [class~="bg-black/30"] {
+.trade-theme [class~="bg-black/30"],
+.trade-theme [class~="bg-black/35"] {
   background-color: var(--trade-popover) !important;
 }
 
@@ -249,7 +278,9 @@ textarea {
   background-color: var(--trade-control-hover) !important;
 }
 
-.trade-theme [class~="border-white/10"] {
+.trade-theme [class~="border-white/5"],
+.trade-theme [class~="border-white/10"],
+.trade-theme [class~="border-white/[0.06]"] {
   border-color: var(--trade-border) !important;
 }
 
@@ -402,6 +433,7 @@ textarea {
 }
 
 .trade-theme [class~="bg-brand"],
+.trade-theme [class~="text-ink"],
 .trade-theme [class~="!text-ink"] {
   color: #0b0f16 !important;
 }

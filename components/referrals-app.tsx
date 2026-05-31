@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Copy, Share2, Users } from "lucide-react";
+import { PublicThemeShell } from "./public-theme-shell";
+import { PublicThemeToggle } from "./public-theme-toggle";
 
 export function ReferralsApp() {
   const [data, setData] = useState<any>(null);
@@ -24,9 +26,13 @@ export function ReferralsApp() {
   }
 
   return (
-    <main className="min-h-screen bg-ink p-5 text-white">
+    <PublicThemeShell>
+    <div className="min-h-screen bg-ink p-5 text-white">
       <div className="mx-auto max-w-4xl">
-        <Link href="/trade" className="text-sm text-gray-400 hover:text-white">Back to trade</Link>
+        <div className="flex items-center justify-between gap-3">
+          <Link href="/trade" className="text-sm text-gray-400 hover:text-white">Back to trade</Link>
+          <PublicThemeToggle />
+        </div>
         <h1 className="mb-6 mt-6 text-4xl font-black">Referrals</h1>
         {notice && <div className="mb-4 rounded-xl bg-white/5 p-3 text-sm text-gray-300">{notice}</div>}
         <section className="glass mb-4 rounded-2xl p-5">
@@ -51,7 +57,8 @@ export function ReferralsApp() {
           ))}
         </section>
       </div>
-    </main>
+    </div>
+    </PublicThemeShell>
   );
 }
 

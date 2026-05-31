@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { ArrowRight, Banknote, Bot, CandlestickChart, CreditCard, Database, Landmark, LockKeyhole, Radio, ShieldCheck, Wallet } from "lucide-react";
+import { Banknote, Bot, CandlestickChart, CreditCard, Database, Landmark, LockKeyhole, Radio, ShieldCheck, Wallet } from "lucide-react";
+import { LandingAuthActions } from "../components/landing-auth-actions";
 import { PublicNav } from "../components/public-nav";
 import { PublicThemeShell } from "../components/public-theme-shell";
 
@@ -75,14 +76,7 @@ export default function HomePage() {
             <p className="mb-8 max-w-2xl text-[15px] leading-relaxed text-gray-400 md:text-lg">
               An AI powered trading platform for live crypto markets, assisted strategy execution, simulated perpetuals, escrow-based peer exchange, sandbox payment rails, risk controls, and transparent ledger operations.
             </p>
-            <div className="mb-9 flex flex-col gap-3 sm:flex-row">
-              <Link href="/register" className="inline-flex items-center justify-center gap-2 rounded-xl bg-brand px-7 py-3.5 text-[15px] font-semibold shadow-glow">
-                Create Account <ArrowRight size={16} />
-              </Link>
-              <Link href="/trade" className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 px-7 py-3.5 text-[15px] font-semibold hover:bg-white/5">
-                Open AI Workspace <CandlestickChart size={16} />
-              </Link>
-            </div>
+            <LandingAuthActions />
             <div className="grid max-w-2xl grid-cols-2 gap-3 sm:grid-cols-4">
               {[
                 ["AI", "Signal support"],
@@ -210,14 +204,7 @@ export default function HomePage() {
         <div className="rounded-3xl bg-gradient-to-br from-brand to-amber-700 px-6 py-14 text-center text-ink md:py-20">
           <h2 className="mb-4 text-3xl font-bold md:text-5xl">Launch the AI trading workspace</h2>
           <p className="mx-auto mb-8 max-w-md text-black/60">Create an account, open the AI-assisted dashboard, test wallet flows, configure automation, and explore P2P escrow in a controlled sandbox.</p>
-          <div className="flex flex-col justify-center gap-3 sm:flex-row">
-            <Link href="/register" className="inline-flex items-center justify-center gap-2 rounded-xl bg-white px-8 py-3.5 text-[15px] font-semibold text-brand">
-              Create Account <ArrowRight size={16} />
-            </Link>
-            <Link href="/trade" className="inline-flex items-center justify-center gap-2 rounded-xl border border-black/10 bg-black/10 px-8 py-3.5 text-[15px] font-semibold text-ink">
-              Open AI Workspace
-            </Link>
-          </div>
+          <LandingAuthActions variant="final" />
         </div>
       </section>
 

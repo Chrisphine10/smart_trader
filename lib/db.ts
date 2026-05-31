@@ -4,7 +4,7 @@ import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { config } from "./config";
 
-const databasePath = resolve(process.cwd(), config.databasePath);
+const databasePath = resolve(/* turbopackIgnore: true */ process.cwd(), config.databasePath);
 mkdirSync(dirname(databasePath), { recursive: true });
 
 const globalForDb = globalThis as unknown as { tagOptionDb?: DatabaseSync };
@@ -13,7 +13,7 @@ export const db = globalForDb.tagOptionDb ?? new DatabaseSync(databasePath);
 globalForDb.tagOptionDb = db;
 
 db.exec("PRAGMA foreign_keys = ON");
-db.exec("PRAGMA busy_timeout = 5000");
+db.exec("PRAGMA busy_timeout = 30000");
 db.exec("PRAGMA journal_mode = WAL");
 
 export type User = {
@@ -445,7 +445,12 @@ export function migrate() {
 function addColumnIfMissing(table: string, column: string, definition: string) {
   const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
   if (!columns.some((item) => item.name === column)) {
-    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    try {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message.toLowerCase() : "";
+      if (!message.includes("duplicate column name")) throw error;
+    }
   }
 }
 
@@ -510,7 +515,7 @@ function seedExchange() {
 export function seedAdmin() {
   const existing = db.prepare("SELECT id FROM admins WHERE email = ?").get(config.adminEmail);
   if (existing) return;
-  db.prepare("INSERT INTO admins (id, email, name, password_hash) VALUES (?, ?, ?, ?)").run(
+  db.prepare("INSERT OR IGNORE INTO admins (id, email, name, password_hash) VALUES (?, ?, ?, ?)").run(
     randomUUID(),
     config.adminEmail,
     config.adminName,

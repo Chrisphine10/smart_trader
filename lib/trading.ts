@@ -1,5 +1,11 @@
 export type Direction = "over" | "under" | "match" | "differ" | "even" | "odd";
 
+const directionValues: Direction[] = ["over", "under", "match", "differ", "even", "odd"];
+
+export function isDirection(value: unknown): value is Direction {
+  return directionValues.includes(value as Direction);
+}
+
 type SmartTick = {
   lastDigit?: number;
   movement?: number;
@@ -23,8 +29,11 @@ export function payoutMultiplier(direction: Direction, selectedDigit = 5): numbe
     const winningDigits = 9 - selectedDigit;
     return winningDigits <= 0 ? 0 : (10 / winningDigits) * 0.95;
   }
-  const winningDigits = selectedDigit;
-  return winningDigits <= 0 ? 0 : (10 / winningDigits) * 0.95;
+  if (direction === "under") {
+    const winningDigits = selectedDigit;
+    return winningDigits <= 0 ? 0 : (10 / winningDigits) * 0.95;
+  }
+  throw new Error("Unsupported trade direction");
 }
 
 export function potentialPayout(stake: number, direction: Direction, selectedDigit = 5): number {
@@ -37,7 +46,8 @@ export function resolveDigitTrade(direction: Direction, selectedDigit: number, e
   if (direction === "over") return exitDigit > selectedDigit;
   if (direction === "under") return exitDigit < selectedDigit;
   if (direction === "match") return exitDigit === selectedDigit;
-  return exitDigit !== selectedDigit;
+  if (direction === "differ") return exitDigit !== selectedDigit;
+  throw new Error("Unsupported trade direction");
 }
 
 export function chooseSmartDigitContract(tick: SmartTick, fallbackDirection: Direction = "even", fallbackDigit = 5): SmartContractDecision {
