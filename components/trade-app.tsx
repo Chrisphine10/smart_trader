@@ -252,6 +252,10 @@ function isInsufficientBalanceMessage(value: unknown) {
   return typeof value === "string" && value.toLowerCase().includes("insufficient balance");
 }
 
+function isTemporaryDemoUser(user: User | null) {
+  return Boolean(user?.is_demo && user.email.endsWith("@tagoption.local"));
+}
+
 function downsampleHistory<T>(items: T[], maxPoints = 80) {
   if (items.length <= maxPoints) return items;
   const step = (items.length - 1) / (maxPoints - 1);
@@ -480,11 +484,20 @@ export function TradeApp() {
     location.href = `/login?redirect=${encodeURIComponent("/trade")}&account=real`;
   }, []);
 
+  const requireRealAccountLogin = useCallback(() => {
+    if (!isTemporaryDemoUser(user)) return false;
+    localStorage.removeItem("token");
+    setToken(null);
+    redirectToTradeLogin();
+    return true;
+  }, [redirectToTradeLogin, user]);
+
   const openDepositPrompt = useCallback((reason?: string) => {
+    if (requireRealAccountLogin()) return;
     setWalletSection("deposit");
     setWalletOpen(true);
     setMessage(reason ?? "Add funds to your real account before placing this trade.");
-  }, []);
+  }, [requireRealAccountLogin]);
 
   const load = useCallback(async (currentToken: string, modeOverride?: boolean) => {
     const headers = { Authorization: `Bearer ${currentToken}` };
@@ -581,14 +594,20 @@ export function TradeApp() {
   useEffect(() => {
     if (!token || !user || defaultRealAppliedRef.current) return;
     defaultRealAppliedRef.current = true;
+    const params = new URLSearchParams(location.search);
+    if (params.get("account") === "demo") return;
     if (!user.is_demo) return;
+    if (isTemporaryDemoUser(user)) {
+      localStorage.removeItem("token");
+      redirectToTradeLogin();
+      return;
+    }
     switchAccount(false).finally(() => {
-      const params = new URLSearchParams(location.search);
       params.delete("account");
       const query = params.toString();
       history.replaceState(null, "", query ? `/trade?${query}` : "/trade");
     });
-  }, [token, user?.id, user?.is_demo]);
+  }, [redirectToTradeLogin, token, user]);
 
   useEffect(() => {
     if (!token) return;
@@ -713,6 +732,12 @@ export function TradeApp() {
 
   async function switchAccount(isDemo: boolean) {
     if (!token) return;
+    if (!isDemo && isTemporaryDemoUser(user)) {
+      localStorage.removeItem("token");
+      setToken(null);
+      redirectToTradeLogin();
+      return;
+    }
     const response = await fetch("/api/auth/switch-account", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
@@ -725,6 +750,11 @@ export function TradeApp() {
     }
     if (data.token) localStorage.setItem("token", data.token);
     if (data.user) setUser(data.user);
+    const params = new URLSearchParams(location.search);
+    if (isDemo) params.set("account", "demo");
+    else params.delete("account");
+    const query = params.toString();
+    history.replaceState(null, "", query ? `/trade?${query}` : "/trade");
     load(data.token ?? token, data.user?.is_demo).catch(() => undefined);
   }
 
@@ -822,10 +852,12 @@ export function TradeApp() {
 
   function selectWorkspace(tab: TradeWorkspace) {
     if (tab === "P2P") {
+      if (requireRealAccountLogin()) return;
       location.href = "/p2p";
       return;
     }
     if (tab === "Wallet") {
+      if (requireRealAccountLogin()) return;
       setActiveWorkspace(tab);
       setWalletSection("deposit");
       setWalletOpen(true);
@@ -1119,7 +1151,7 @@ export function TradeApp() {
               {isForexMode ? <Grid3X3 size={15} /> : <TrendingUp size={15} />}
               <span>{marketToggleLabel}</span>
             </button>
-            <button aria-label="Open wallet" onClick={() => { setWalletSection("deposit"); setWalletOpen(true); }} className="inline-flex h-10 min-w-[112px] shrink-0 items-center justify-center gap-1.5 rounded-lg bg-white/5 px-3 text-xs font-bold hover:bg-white/10"><Wallet size={15} /><span>${Number(user.active_balance).toFixed(2)}</span></button>
+            <button aria-label="Open wallet" onClick={() => { if (requireRealAccountLogin()) return; setWalletSection("deposit"); setWalletOpen(true); }} className="inline-flex h-10 min-w-[112px] shrink-0 items-center justify-center gap-1.5 rounded-lg bg-white/5 px-3 text-xs font-bold hover:bg-white/10"><Wallet size={15} /><span>${Number(user.active_balance).toFixed(2)}</span></button>
             <button
               aria-label={`Switch to ${themeMode === "light" ? "dark" : "light"} theme`}
               title={`Switch to ${themeMode === "light" ? "dark" : "light"} theme`}
@@ -1305,9 +1337,9 @@ export function TradeApp() {
                 </span>
                 <ChevronDown size={15} className="shrink-0 text-gray-400" />
               </button>
-              <button onClick={() => { setWalletSection("deposit"); setWalletOpen(true); }} className="h-9 rounded-xl bg-brand px-3 text-sm font-black text-ink shadow-lg shadow-brand/20">Deposit</button>
-              <button aria-label="Open notifications" onClick={() => setChatOpen(true)} className="grid h-9 w-9 place-items-center rounded-full border border-white/10 bg-white/5 text-gray-300 hover:bg-white/10"><Bell size={18} /></button>
-              <button aria-label="Open profile" onClick={() => { location.href = "/settings"; }} className="grid h-9 w-9 place-items-center rounded-full border border-white/10 bg-white/5 text-gray-300 hover:bg-white/10"><CircleUserRound size={19} /></button>
+              <button onClick={() => { if (requireRealAccountLogin()) return; setWalletSection("deposit"); setWalletOpen(true); }} className="h-9 rounded-xl bg-brand px-3 text-sm font-black text-ink shadow-lg shadow-brand/20">Deposit</button>
+              <button aria-label="Open notifications" onClick={() => { if (requireRealAccountLogin()) return; setChatOpen(true); }} className="grid h-9 w-9 place-items-center rounded-full border border-white/10 bg-white/5 text-gray-300 hover:bg-white/10"><Bell size={18} /></button>
+              <button aria-label="Open profile" onClick={() => { if (requireRealAccountLogin()) return; location.href = "/settings"; }} className="grid h-9 w-9 place-items-center rounded-full border border-white/10 bg-white/5 text-gray-300 hover:bg-white/10"><CircleUserRound size={19} /></button>
             </div>
 
             <div className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-hidden p-1.5 min-[900px]:p-2">

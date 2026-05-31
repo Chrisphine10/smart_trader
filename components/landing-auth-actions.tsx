@@ -51,12 +51,13 @@ export function LandingAuthActions({ variant = "hero" }: { variant?: "nav" | "he
   if (variant === "nav") {
     if (authState.status === "checking") return <div aria-hidden="true" className="h-9 w-36 rounded-lg bg-white/5" />;
     if (authState.status === "authenticated") {
+      const tradeHref = authState.user.is_demo ? "/trade?account=demo" : "/trade";
       return (
         <div className="flex items-center gap-2">
           <span className="hidden max-w-32 truncate rounded-md px-2.5 py-1.5 text-[13px] font-medium text-gray-300 sm:inline-flex">
             {authState.user.username || authState.user.email || "Account"}
           </span>
-          <Link href="/trade" className="rounded-lg bg-brand px-4 py-2 text-[13px] font-semibold shadow-glow">Dashboard</Link>
+          <Link href={tradeHref} className="rounded-lg bg-brand px-4 py-2 text-[13px] font-semibold shadow-glow">Dashboard</Link>
         </div>
       );
     }
@@ -81,10 +82,11 @@ export function LandingAuthActions({ variant = "hero" }: { variant?: "nav" | "he
 
   if (authState.status === "authenticated") {
     const displayName = authState.user.username || authState.user.email || "Trader";
+    const tradeHref = authState.user.is_demo ? "/trade?account=demo" : "/trade";
     if (variant === "final") {
       return (
         <div className="flex flex-col justify-center gap-3 sm:flex-row">
-          <Link href="/trade" className="inline-flex items-center justify-center gap-2 rounded-xl bg-white px-8 py-3.5 text-[15px] font-semibold text-brand">
+          <Link href={tradeHref} className="inline-flex items-center justify-center gap-2 rounded-xl bg-white px-8 py-3.5 text-[15px] font-semibold text-brand">
             Open Dashboard <ArrowRight size={16} />
           </Link>
           <Link href="/p2p" className="inline-flex items-center justify-center gap-2 rounded-xl border border-black/10 bg-black/10 px-8 py-3.5 text-[15px] font-semibold text-ink">
@@ -102,7 +104,7 @@ export function LandingAuthActions({ variant = "hero" }: { variant?: "nav" | "he
           <span className="shrink-0 text-gray-500">{authState.user.is_demo ? "Demo" : "Real"}</span>
         </div>
         <div className="flex flex-col gap-3 sm:flex-row">
-          <Link href="/trade" className="inline-flex items-center justify-center gap-2 rounded-xl bg-brand px-7 py-3.5 text-[15px] font-semibold shadow-glow">
+          <Link href={tradeHref} className="inline-flex items-center justify-center gap-2 rounded-xl bg-brand px-7 py-3.5 text-[15px] font-semibold shadow-glow">
             Continue Trading <CandlestickChart size={16} />
           </Link>
           <Link href="/p2p" className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 px-7 py-3.5 text-[15px] font-semibold hover:bg-white/5">

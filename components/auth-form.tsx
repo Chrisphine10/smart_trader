@@ -67,9 +67,7 @@ export function AuthForm({ mode }: { mode: Mode }) {
       const data = await response.json();
       if (!response.ok || !data.token) throw new Error(data.error ?? "Unable to start demo account");
       localStorage.setItem("token", data.token);
-      const redirect = params.get("redirect");
-      const safeRedirect = redirect?.startsWith("/") && !redirect.startsWith("//") ? redirect : "/trade";
-      router.push(safeRedirect);
+      router.push("/trade?account=demo");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to start demo account");
     } finally {
