@@ -1079,6 +1079,7 @@ export function TradeApp() {
   const openPositions = positions.filter((position) => position.status === "open");
   const completedPositions = positions.filter((position) => position.status !== "open");
   const sessionProfitLoss = Number(autoSession?.sessionPL ?? 0);
+  const sessionTradesCount = Number(autoSession?.tradesCount ?? 0);
   const isAutoRunning = Boolean(autoSession?.active);
   const activeAutoStopDirection = isAutoRunning ? autoControlDirection ?? autoSession?.direction ?? null : null;
   const movement = Number(tick?.movement ?? 0);
@@ -1298,8 +1299,8 @@ export function TradeApp() {
                 <div className={`mt-1 truncate text-sm font-black ${sessionProfitLoss >= 0 ? "text-emerald-400" : "text-rose-400"}`}>{moneyLabel(sessionProfitLoss, true)}</div>
               </div>
               <div className="min-w-0 rounded-lg bg-white/5 p-2">
-                <div className="truncate text-[10px] font-black uppercase tracking-wide text-gray-500">Open</div>
-                <div className="mt-1 truncate text-sm font-black text-white">{openPositions.length}</div>
+                <div className="truncate text-[10px] font-black uppercase tracking-wide text-gray-500">Trades</div>
+                <div className="mt-1 truncate text-sm font-black text-white">{sessionTradesCount}</div>
               </div>
             </div>
           </div>
