@@ -463,6 +463,7 @@ function seedAppSettings() {
     "payments.minWithdrawal": "1",
     "payments.withdrawalReview": "true",
     "mpesa.enabled": "true",
+    "mpesa.withdrawals.enabled": "true",
     "mpesa.environment": "sandbox",
     "mpesa.shortCode": "174379",
     "mpesa.transactionType": "CustomerPayBillOnline",
@@ -476,6 +477,9 @@ function seedAppSettings() {
     "paystack.secretKey": process.env.PAYSTACK_SECRET_KEY ?? "",
     "paystack.currency": "KES",
     "paystack.callbackUrl": `${config.appUrl}/trade`,
+    "card.enabled": "true",
+    "trc20.enabled": "true",
+    "trc20.withdrawals.enabled": "true",
     "risk.maxStake": "500",
     "risk.maxOpenPositions": "10",
     "risk.maxBotSessions": "1",
@@ -513,8 +517,14 @@ function seedExchange() {
 }
 
 export function seedAdmin() {
-  const existing = db.prepare("SELECT id FROM admins WHERE email = ?").get(config.adminEmail);
-  if (existing) return;
+  const existing = db.prepare("SELECT id, email, name, password_hash FROM admins WHERE lower(email) = lower(?)").get(config.adminEmail) as { id: string; email: string; name: string; password_hash: string } | undefined;
+  if (existing) {
+    const passwordMatches = verifyPassword(config.adminPassword, existing.password_hash);
+    if (existing.email !== config.adminEmail || existing.name !== config.adminName || !passwordMatches) {
+      db.prepare("UPDATE admins SET email = ?, name = ?, password_hash = ? WHERE id = ?").run(config.adminEmail, config.adminName, hashPassword(config.adminPassword), existing.id);
+    }
+    return;
+  }
   db.prepare("INSERT OR IGNORE INTO admins (id, email, name, password_hash) VALUES (?, ?, ?, ?)").run(
     randomUUID(),
     config.adminEmail,

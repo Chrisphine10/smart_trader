@@ -238,7 +238,7 @@ export function AdminApp() {
                 <Field label="USD to KES rate" value={settings["payments.usdKesRate"]} onChange={(value) => update("payments.usdKesRate", value)} />
                 <Field label="Minimum deposit USD" value={settings["payments.minDeposit"]} onChange={(value) => update("payments.minDeposit", value)} />
                 <Field label="Minimum withdrawal USD" value={settings["payments.minWithdrawal"]} onChange={(value) => update("payments.minWithdrawal", value)} />
-                <Field label="Withdrawal review required" value={settings["payments.withdrawalReview"]} onChange={(value) => update("payments.withdrawalReview", value)} />
+                <ToggleField label="Withdrawal review required" value={settings["payments.withdrawalReview"]} onChange={(value) => update("payments.withdrawalReview", value)} />
               </div>
               <div className="mt-4 rounded-xl bg-white/5 p-4 text-sm text-gray-300">
                 Sandbox mode lets users fund their real wallet instantly for local testing. Live mode creates Daraja STK pushes or Paystack checkout sessions and keeps deposits pending until callbacks or verification are added.
@@ -248,7 +248,8 @@ export function AdminApp() {
             <div className="grid gap-4">
               <ProviderPanel icon={<Smartphone />} title="M-Pesa Daraja">
                 <div className="grid gap-4 md:grid-cols-2">
-                  <Field label="Enabled" value={settings["mpesa.enabled"]} onChange={(value) => update("mpesa.enabled", value)} />
+                  <ToggleField label="Deposits enabled" value={settings["mpesa.enabled"]} onChange={(value) => update("mpesa.enabled", value)} />
+                  <ToggleField label="Withdrawals enabled" value={settings["mpesa.withdrawals.enabled"]} onChange={(value) => update("mpesa.withdrawals.enabled", value)} />
                   <Field label="Environment" value={settings["mpesa.environment"]} onChange={(value) => update("mpesa.environment", value)} />
                   <Field label="Short code" value={settings["mpesa.shortCode"]} onChange={(value) => update("mpesa.shortCode", value)} />
                   <Field label="Transaction type" value={settings["mpesa.transactionType"]} onChange={(value) => update("mpesa.transactionType", value)} />
@@ -262,11 +263,25 @@ export function AdminApp() {
 
               <ProviderPanel icon={<CreditCard />} title="Paystack">
                 <div className="grid gap-4 md:grid-cols-2">
-                  <Field label="Enabled" value={settings["paystack.enabled"]} onChange={(value) => update("paystack.enabled", value)} />
+                  <ToggleField label="Deposits enabled" value={settings["paystack.enabled"]} onChange={(value) => update("paystack.enabled", value)} />
                   <Field label="Currency" value={settings["paystack.currency"]} onChange={(value) => update("paystack.currency", value)} />
                   <Field label="Public key" value={settings["paystack.publicKey"]} onChange={(value) => update("paystack.publicKey", value)} />
                   <Field label="Secret key" value={settings["paystack.secretKey"]} onChange={(value) => update("paystack.secretKey", value)} password />
                   <Field label="Callback URL" value={settings["paystack.callbackUrl"]} onChange={(value) => update("paystack.callbackUrl", value)} />
+                </div>
+              </ProviderPanel>
+
+              <ProviderPanel icon={<CreditCard />} title="Card">
+                <div className="grid gap-4 md:grid-cols-2">
+                  <ToggleField label="Deposits enabled" value={settings["card.enabled"]} onChange={(value) => update("card.enabled", value)} />
+                </div>
+                <div className="mt-4 rounded-xl bg-white/5 p-3 text-sm text-gray-300">Card deposits credit real accounts in sandbox mode. In live mode, use Paystack for card checkout until a direct card provider is configured.</div>
+              </ProviderPanel>
+
+              <ProviderPanel icon={<Wallet />} title="TRC20">
+                <div className="grid gap-4 md:grid-cols-2">
+                  <ToggleField label="Deposits enabled" value={settings["trc20.enabled"]} onChange={(value) => update("trc20.enabled", value)} />
+                  <ToggleField label="Withdrawals enabled" value={settings["trc20.withdrawals.enabled"]} onChange={(value) => update("trc20.withdrawals.enabled", value)} />
                 </div>
               </ProviderPanel>
             </div>
@@ -549,6 +564,24 @@ function Field({ label, value, onChange, password }: { label: string; value?: st
   return (
     <label className="block text-sm font-medium">{label}
       <input className="field mt-2" type={password ? "password" : "text"} value={value ?? ""} onChange={(event) => onChange(event.target.value)} />
+    </label>
+  );
+}
+
+function ToggleField({ label, value, onChange }: { label: string; value?: string; onChange: (value: string) => void }) {
+  const enabled = value !== "false";
+  return (
+    <label className="block text-sm font-medium">{label}
+      <button
+        type="button"
+        onClick={() => onChange(enabled ? "false" : "true")}
+        className={`mt-2 flex h-11 w-full items-center justify-between rounded-xl border px-3 font-bold ${enabled ? "border-emerald-400/35 bg-emerald-400/10 text-emerald-300" : "border-white/10 bg-white/5 text-gray-400"}`}
+      >
+        <span>{enabled ? "On" : "Off"}</span>
+        <span className={`relative h-6 w-11 rounded-full ${enabled ? "bg-emerald-400" : "bg-white/20"}`}>
+          <span className={`absolute top-1 h-4 w-4 rounded-full bg-white transition ${enabled ? "left-6" : "left-1"}`} />
+        </span>
+      </button>
     </label>
   );
 }

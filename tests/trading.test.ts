@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import { db, hashPassword, migrate, referralCode, trc20Address, type User } from "../lib/db";
+import { config } from "../lib/config";
+import { db, hashPassword, migrate, referralCode, seedAdmin, trc20Address, verifyPassword, type User } from "../lib/db";
 import { calculateEscrowSplit, createManualTrade, maybeCreateAutoTrade, settleOpenPositions, startAutoSession } from "../lib/repositories";
 import { chooseSmartDigitContract, payoutMultiplier, potentialPayout, resolveDigitTrade, type Direction } from "../lib/trading";
 
@@ -15,6 +16,16 @@ function createTradingUser(label: string): User {
 describe("trading math", () => {
   beforeAll(() => {
     migrate();
+  });
+
+  it("syncs the configured admin login on migration", () => {
+    const admin = db.prepare("SELECT * FROM admins WHERE lower(email) = lower(?)").get(config.adminEmail) as { id: string; password_hash: string };
+    db.prepare("UPDATE admins SET password_hash = ? WHERE id = ?").run(hashPassword("old-admin-password"), admin.id);
+
+    seedAdmin();
+
+    const fresh = db.prepare("SELECT * FROM admins WHERE id = ?").get(admin.id) as { password_hash: string };
+    expect(verifyPassword(config.adminPassword, fresh.password_hash)).toBe(true);
   });
 
   it("calculates over and under payouts from selected digit", () => {

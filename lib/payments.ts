@@ -5,7 +5,7 @@ import { getAppSetting, recordDeposit, recordPendingDeposit } from "./repositori
 type PaymentResult = {
   success: boolean;
   mode: "sandbox" | "live";
-  provider: "mpesa" | "paystack";
+  provider: "mpesa" | "paystack" | "card";
   message: string;
   checkoutUrl?: string;
   reference?: string;
@@ -20,7 +20,7 @@ export async function initiateMpesaDeposit(user: User, amountUsd: number, phone:
   const amount = money(amountUsd);
   const mode = paymentMode();
   const amountKes = usdToKes(amount);
-  if (user.is_demo || mode === "sandbox" || !setting("mpesa.consumerKey") || !setting("mpesa.consumerSecret") || !setting("mpesa.passkey")) {
+  if (user.is_demo || mode === "sandbox") {
     const result = recordDeposit(user, "mpesa", amount, Boolean(user.is_demo));
     return {
       success: true,
@@ -29,6 +29,9 @@ export async function initiateMpesaDeposit(user: User, amountUsd: number, phone:
       message: "Sandbox M-Pesa STK push approved and credited",
       ...result,
     };
+  }
+  if (!setting("mpesa.consumerKey") || !setting("mpesa.consumerSecret") || !setting("mpesa.passkey")) {
+    throw new Error("M-Pesa live credentials are not configured");
   }
 
   const reference = `MPESA-${Date.now()}`;
@@ -73,7 +76,7 @@ export async function initiatePaystackDeposit(user: User, amountUsd: number): Pr
   const mode = paymentMode();
   const reference = `PSTK-${Date.now()}`;
   const secretKey = setting("paystack.secretKey");
-  if (user.is_demo || mode === "sandbox" || !secretKey) {
+  if (user.is_demo || mode === "sandbox") {
     const result = recordDeposit(user, "paystack", amount, Boolean(user.is_demo));
     return {
       success: true,
@@ -84,6 +87,7 @@ export async function initiatePaystackDeposit(user: User, amountUsd: number): Pr
       ...result,
     };
   }
+  if (!secretKey) throw new Error("Paystack live secret key is not configured");
 
   const currency = setting("paystack.currency", "KES");
   const unitAmount = currency.toUpperCase() === "USD" ? Math.round(amount * 100) : Math.round(usdToKes(amount) * 100);
@@ -111,6 +115,21 @@ export async function initiatePaystackDeposit(user: User, amountUsd: number): Pr
     checkoutUrl,
     reference: payload.data?.reference ?? reference,
     providerResponse: payload,
+  };
+}
+
+export async function initiateCardDeposit(user: User, amountUsd: number): Promise<PaymentResult> {
+  if (setting("card.enabled", "true") !== "true") throw new Error("Card deposits are disabled by admin");
+  const amount = money(amountUsd);
+  const mode = paymentMode();
+  if (!user.is_demo && mode === "live") throw new Error("Live card deposits require a configured card provider. Use Paystack or M-Pesa.");
+  const result = recordDeposit(user, "card", amount, Boolean(user.is_demo));
+  return {
+    success: true,
+    mode: "sandbox",
+    provider: "card",
+    message: "Sandbox card deposit approved and credited",
+    ...result,
   };
 }
 

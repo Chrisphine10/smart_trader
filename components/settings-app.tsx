@@ -8,6 +8,15 @@ import { PublicThemeShell } from "./public-theme-shell";
 import { PublicThemeToggle } from "./public-theme-toggle";
 
 type SettingsTab = "profile" | "security" | "payments" | "preferences";
+type PaymentAvailability = {
+  deposit: Record<"mpesa" | "paystack" | "card" | "trc20", boolean>;
+  withdraw: Record<"mpesa" | "trc20", boolean>;
+};
+
+const defaultPaymentAvailability: PaymentAvailability = {
+  deposit: { mpesa: true, paystack: true, card: true, trc20: true },
+  withdraw: { mpesa: true, trc20: true },
+};
 
 export function SettingsApp() {
   const [user, setUser] = useState<any>(null);
@@ -15,6 +24,7 @@ export function SettingsApp() {
   const [notice, setNotice] = useState("");
   const [trc20Address, setTrc20Address] = useState("");
   const [exchangeRate, setExchangeRate] = useState(129.09);
+  const [paymentAvailability, setPaymentAvailability] = useState<PaymentAvailability>(defaultPaymentAvailability);
   const [kycForm, setKycForm] = useState({ fullName: "", documentType: "national_id", documentNumber: "", country: "KE", notes: "" });
   const [preferences, setPreferences] = useState({ theme: "Light", sound: "Enabled", chartDensity: "Professional", notifications: "Trade + wallet" });
 
@@ -28,6 +38,12 @@ export function SettingsApp() {
     fetch("/api/auth/me", { headers }).then((response) => response.json()).then((data) => setUser(data.user));
     fetch("/api/auth/trc20/my-address", { headers }).then((response) => response.json()).then((data) => setTrc20Address(data.address ?? "")).catch(() => undefined);
     fetch("/api/auth/exchange-rate", { headers }).then((response) => response.json()).then((data) => setExchangeRate(Number(data.rate ?? 129.09))).catch(() => undefined);
+    fetch("/api/auth/payment-methods", { headers }).then((response) => response.json()).then((data) => {
+      setPaymentAvailability({
+        deposit: { ...defaultPaymentAvailability.deposit, ...(data.deposit ?? {}) },
+        withdraw: { ...defaultPaymentAvailability.withdraw, ...(data.withdraw ?? {}) },
+      });
+    }).catch(() => undefined);
     const saved = localStorage.getItem("hydratrade.preferences");
     if (saved) setPreferences((current) => ({ ...current, ...JSON.parse(saved) }));
     const savedTheme = localStorage.getItem("trade-theme");
@@ -43,6 +59,16 @@ export function SettingsApp() {
     ["KYC status", user?.kyc_status ?? "unverified"],
     ["Joined", user?.created_at ?? "Loading..."],
   ], [user]);
+  const depositMethods = useMemo(() => [
+    paymentAvailability.deposit.mpesa ? "M-Pesa" : null,
+    paymentAvailability.deposit.paystack ? "Paystack" : null,
+    paymentAvailability.deposit.card ? "Card" : null,
+    paymentAvailability.deposit.trc20 ? "TRC20" : null,
+  ].filter(Boolean).join(", ") || "Disabled", [paymentAvailability]);
+  const withdrawalMethods = useMemo(() => [
+    paymentAvailability.withdraw.mpesa ? "M-Pesa" : null,
+    paymentAvailability.withdraw.trc20 ? "TRC20" : null,
+  ].filter(Boolean).join(", ") || "Disabled", [paymentAvailability]);
 
   function savePreferences() {
     localStorage.setItem("hydratrade.preferences", JSON.stringify(preferences));
@@ -163,16 +189,18 @@ export function SettingsApp() {
               <div className="grid gap-3 md:grid-cols-3">
                 <Metric label="USD/KES rate" value={exchangeRate.toFixed(2)} />
                 <Metric label="M-Pesa" value={user?.mpesa_phone ?? "Not set"} />
-                <Metric label="TRC20" value={trc20Address ? "Ready" : "Loading"} />
+                <Metric label="TRC20" value={paymentAvailability.deposit.trc20 ? trc20Address ? "Ready" : "Loading" : "Disabled"} />
               </div>
-              <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
-                <div className="mb-2 text-xs font-bold uppercase tracking-wider text-gray-500">TRC20 deposit address</div>
-                <div className="break-all font-mono text-sm text-brand">{trc20Address || "Loading address..."}</div>
-                <button onClick={() => trc20Address && navigator.clipboard?.writeText(trc20Address).then(() => setNotice("TRC20 address copied"))} className="mt-3 inline-flex items-center gap-2 rounded-xl bg-white/10 px-3 py-2 text-xs font-bold"><Copy size={14} /> Copy address</button>
-              </div>
+              {paymentAvailability.deposit.trc20 && (
+                <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
+                  <div className="mb-2 text-xs font-bold uppercase tracking-wider text-gray-500">TRC20 deposit address</div>
+                  <div className="break-all font-mono text-sm text-brand">{trc20Address || "Loading address..."}</div>
+                  <button onClick={() => trc20Address && navigator.clipboard?.writeText(trc20Address).then(() => setNotice("TRC20 address copied"))} className="mt-3 inline-flex items-center gap-2 rounded-xl bg-white/10 px-3 py-2 text-xs font-bold"><Copy size={14} /> Copy address</button>
+                </div>
+              )}
               <div className="mt-4 grid gap-3 md:grid-cols-2">
-                <Row label="Deposit methods" value="M-Pesa, Paystack, card, TRC20" />
-                <Row label="Withdrawal methods" value="M-Pesa, TRC20" />
+                <Row label="Deposit methods" value={depositMethods} />
+                <Row label="Withdrawal methods" value={withdrawalMethods} />
               </div>
             </Panel>
           )}

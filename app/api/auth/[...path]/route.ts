@@ -2,7 +2,7 @@ import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { type NextRequest } from "next/server";
 import { db, getUserByEmail, getUserById, hashPassword, money, publicUser, referralCode, requireUserFromHeader, signToken, trc20Address, verifyPassword } from "../../../../lib/db";
 import { error, handleRoute, json, rateLimit, readBody } from "../../../../lib/http";
-import { initiateMpesaDeposit, initiatePaystackDeposit } from "../../../../lib/payments";
+import { initiateCardDeposit, initiateMpesaDeposit, initiatePaystackDeposit } from "../../../../lib/payments";
 import { confirmProviderDeposit, getAppSetting } from "../../../../lib/repositories";
 
 export const runtime = "nodejs";
@@ -17,8 +17,26 @@ export async function GET(request: NextRequest, context: { params: Promise<{ pat
     if (path === "exchange-rate") {
       return json({ from: "USD", to: "KES", rate: Number(getAppSetting("payments.usdKesRate", "129.09")), lastUpdated: new Date().toISOString() });
     }
+    if (path === "payment-methods") {
+      requireUserFromHeader(request.headers.get("authorization"));
+      return json({
+        mode: getAppSetting("payments.mode", "sandbox"),
+        currency: getAppSetting("payments.currency", "KES"),
+        deposit: {
+          mpesa: getAppSetting("mpesa.enabled", "true") === "true",
+          paystack: getAppSetting("paystack.enabled", "true") === "true",
+          card: getAppSetting("card.enabled", "true") === "true",
+          trc20: getAppSetting("trc20.enabled", "true") === "true",
+        },
+        withdraw: {
+          mpesa: getAppSetting("mpesa.withdrawals.enabled", "true") === "true",
+          trc20: getAppSetting("trc20.withdrawals.enabled", "true") === "true",
+        },
+      });
+    }
     if (path === "trc20/my-address") {
       const user = requireUserFromHeader(request.headers.get("authorization"));
+      if (getAppSetting("trc20.enabled", "true") !== "true") return error("TRC20 deposits are disabled by admin", 403);
       return json({ address: user.trc20_address });
     }
     if (path === "deposits") {
@@ -102,7 +120,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ pa
       const amount = money(body.amount);
       const minDeposit = Number(getAppSetting("payments.minDeposit", "1"));
       if (amount < minDeposit) return error(`Minimum deposit is $${minDeposit}`);
-      return json(await initiatePaystackDeposit(user, amount));
+      return json(await initiateCardDeposit(user, amount));
     }
 
     if (path === "paystack/initialize") {

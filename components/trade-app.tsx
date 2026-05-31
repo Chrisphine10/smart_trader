@@ -20,6 +20,15 @@ type User = {
   referral_code?: string;
 };
 
+type DepositMethod = "mpesa" | "paystack" | "card" | "trc20";
+type WithdrawMethod = "mpesa" | "trc20";
+type PaymentAvailability = {
+  mode: "sandbox" | "live";
+  currency: string;
+  deposit: Record<DepositMethod, boolean>;
+  withdraw: Record<WithdrawMethod, boolean>;
+};
+
 type Tick = {
   asset: string;
   price: number;
@@ -99,6 +108,12 @@ type AiRecommendation = {
 
 const quickStakeAmounts = [1, 5, 10, 25, 50, 100];
 const digitOptions = Array.from({ length: 10 }, (_, digit) => digit);
+const defaultPaymentAvailability: PaymentAvailability = {
+  mode: "sandbox",
+  currency: "KES",
+  deposit: { mpesa: true, paystack: true, card: true, trc20: true },
+  withdraw: { mpesa: true, trc20: true },
+};
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
@@ -717,7 +732,10 @@ export function TradeApp() {
   }
 
   async function switchAccount(isDemo: boolean) {
-    if (!token) return;
+    if (!token) {
+      if (!isDemo) redirectToTradeLogin();
+      return;
+    }
     const response = await fetch("/api/auth/switch-account", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
@@ -725,6 +743,11 @@ export function TradeApp() {
     });
     const data = await readJson<{ user?: User; token?: string; error?: string }>(response, {});
     if (!response.ok) {
+      if (response.status === 401) {
+        localStorage.removeItem("token");
+        redirectToTradeLogin();
+        return;
+      }
       setMessage(data.error ?? "Unable to switch account mode");
       return;
     }
@@ -1858,31 +1881,49 @@ function WalletDrawer({ initialSection, token, user, transactions, referral, onR
   const [wallet, setWallet] = useState("");
   const [notice, setNotice] = useState("");
   const [checkoutUrl, setCheckoutUrl] = useState("");
-  const [depositMethod, setDepositMethod] = useState<"mpesa" | "paystack" | "card" | "trc20">("mpesa");
-  const [withdrawMethod, setWithdrawMethod] = useState<"mpesa" | "trc20">("mpesa");
+  const [depositMethod, setDepositMethod] = useState<DepositMethod>("mpesa");
+  const [withdrawMethod, setWithdrawMethod] = useState<WithdrawMethod>("mpesa");
   const [deposits, setDeposits] = useState<any[]>([]);
   const [withdrawals, setWithdrawals] = useState<any[]>([]);
   const [trc20Address, setTrc20Address] = useState("");
   const [exchangeRate, setExchangeRate] = useState(129.09);
+  const [paymentAvailability, setPaymentAvailability] = useState<PaymentAvailability>(defaultPaymentAvailability);
+  const depositMethods = useMemo(() => (["mpesa", "paystack", "card", "trc20"] as DepositMethod[]).filter((item) => paymentAvailability.deposit[item]), [paymentAvailability]);
+  const withdrawMethods = useMemo(() => (["mpesa", "trc20"] as WithdrawMethod[]).filter((item) => paymentAvailability.withdraw[item]), [paymentAvailability]);
 
   async function loadPayments() {
     if (!token) return;
     const headers = { Authorization: `Bearer ${token}` };
-    const [depositData, withdrawalData, addressData, rateData] = await Promise.all([
+    const [depositData, withdrawalData, addressData, rateData, methodData] = await Promise.all([
       fetchJson<{ deposits: any[] }>("/api/auth/deposits", { headers }, { deposits: [] }).catch(() => ({ deposits: [] })),
       fetchJson<{ withdrawals: any[] }>("/api/withdrawals/history", { headers }, { withdrawals: [] }).catch(() => ({ withdrawals: [] })),
       fetchJson<{ address: string }>("/api/auth/trc20/my-address", { headers }, { address: "" }).catch(() => ({ address: "" })),
       fetchJson<{ rate: number }>("/api/auth/exchange-rate", { headers }, { rate: 129.09 }).catch(() => ({ rate: 129.09 })),
+      fetchJson<PaymentAvailability>("/api/auth/payment-methods", { headers }, defaultPaymentAvailability).catch(() => defaultPaymentAvailability),
     ]);
     setDeposits(depositData.deposits ?? []);
     setWithdrawals(withdrawalData.withdrawals ?? []);
     setTrc20Address(addressData.address ?? "");
     setExchangeRate(Number(rateData.rate ?? 129.09));
+    setPaymentAvailability({
+      ...defaultPaymentAvailability,
+      ...methodData,
+      deposit: { ...defaultPaymentAvailability.deposit, ...(methodData.deposit ?? {}) },
+      withdraw: { ...defaultPaymentAvailability.withdraw, ...(methodData.withdraw ?? {}) },
+    });
   }
 
   useEffect(() => {
     loadPayments().catch(() => undefined);
   }, [token]);
+
+  useEffect(() => {
+    if (!depositMethods.includes(depositMethod) && depositMethods[0]) setDepositMethod(depositMethods[0]);
+  }, [depositMethod, depositMethods]);
+
+  useEffect(() => {
+    if (!withdrawMethods.includes(withdrawMethod) && withdrawMethods[0]) setWithdrawMethod(withdrawMethods[0]);
+  }, [withdrawMethod, withdrawMethods]);
 
   async function post(url: string, body: Record<string, unknown>) {
     if (!token) return;
@@ -1915,19 +1956,19 @@ function WalletDrawer({ initialSection, token, user, transactions, referral, onR
             <div className="grid grid-cols-1 gap-2 text-xs sm:grid-cols-3">
               <div className="rounded-xl bg-white/5 p-3"><div className="text-gray-500">KES estimate</div><div className="font-black">KES {(amount * exchangeRate).toFixed(0)}</div></div>
               <div className="rounded-xl bg-white/5 p-3"><div className="text-gray-500">Rate</div><div className="font-black">{exchangeRate.toFixed(2)}</div></div>
-              <div className="rounded-xl bg-white/5 p-3"><div className="text-gray-500">Mode</div><div className="font-black">Sandbox/live ready</div></div>
+              <div className="rounded-xl bg-white/5 p-3"><div className="text-gray-500">Mode</div><div className="font-black">{paymentAvailability.mode === "live" ? "Live" : "Sandbox"}</div></div>
             </div>
           </div>
         )}
         {section === "deposit" && (
           <>
-            <div className="mb-4 grid grid-cols-2 gap-2 text-xs font-bold sm:grid-cols-4">
-              {(["mpesa", "paystack", "card", "trc20"] as const).map((item) => (
+            {depositMethods.length > 0 ? <div className="mb-4 grid grid-cols-2 gap-2 text-xs font-bold sm:grid-cols-4">
+              {depositMethods.map((item) => (
                 <button key={item} onClick={() => setDepositMethod(item)} className={`rounded-lg px-2 py-2 uppercase ${depositMethod === item ? "bg-brand" : "bg-white/5"}`}>{item}</button>
               ))}
-            </div>
-            {depositMethod === "mpesa" && <label className="mb-4 block text-sm font-medium">M-Pesa phone<input className="field mt-2" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="0712345678 or 254712345678" /></label>}
-            {depositMethod === "trc20" && (
+            </div> : <div className="mb-4 rounded-xl bg-white/5 p-3 text-sm text-gray-300">Deposits are currently disabled by admin.</div>}
+            {paymentAvailability.deposit.mpesa && depositMethod === "mpesa" && <label className="mb-4 block text-sm font-medium">M-Pesa phone<input className="field mt-2" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="0712345678 or 254712345678" /></label>}
+            {paymentAvailability.deposit.trc20 && depositMethod === "trc20" && (
               <div className="mb-4 rounded-2xl border border-white/10 bg-white/5 p-4">
                 <div className="text-xs font-bold uppercase tracking-wider text-gray-500">TRC20 deposit address</div>
                 <div className="mt-2 break-all font-mono text-sm text-brand">{trc20Address || "Loading address..."}</div>
@@ -1935,23 +1976,23 @@ function WalletDrawer({ initialSection, token, user, transactions, referral, onR
               </div>
             )}
             <div className="mb-5 grid gap-3">
-              {depositMethod === "mpesa" && <button onClick={() => post("/api/auth/mpesa/stk-push", { amount, phone })} className="inline-flex items-center justify-center gap-2 rounded-xl bg-brand px-4 py-3 font-bold"><Smartphone size={16} /> Send M-Pesa STK Push</button>}
-              {depositMethod === "paystack" && <button onClick={() => post("/api/auth/paystack/initialize", { amount })} className="inline-flex items-center justify-center gap-2 rounded-xl bg-brand px-4 py-3 font-bold"><CreditCard size={16} /> Pay with Paystack</button>}
-              {depositMethod === "card" && <button onClick={() => post("/api/auth/card/deposit", { amount })} className="inline-flex items-center justify-center gap-2 rounded-xl bg-brand px-4 py-3 font-bold"><CreditCard size={16} /> Sandbox Card Credit</button>}
-              {depositMethod === "trc20" && <div className="rounded-xl bg-white/5 p-3 text-sm text-gray-300">Crypto deposits are reviewed before crediting. Send testnet funds only, then contact support with the transaction reference.</div>}
+              {paymentAvailability.deposit.mpesa && depositMethod === "mpesa" && <button onClick={() => post("/api/auth/mpesa/stk-push", { amount, phone })} className="inline-flex items-center justify-center gap-2 rounded-xl bg-brand px-4 py-3 font-bold"><Smartphone size={16} /> Send M-Pesa STK Push</button>}
+              {paymentAvailability.deposit.paystack && depositMethod === "paystack" && <button onClick={() => post("/api/auth/paystack/initialize", { amount })} className="inline-flex items-center justify-center gap-2 rounded-xl bg-brand px-4 py-3 font-bold"><CreditCard size={16} /> Pay with Paystack</button>}
+              {paymentAvailability.deposit.card && depositMethod === "card" && <button onClick={() => post("/api/auth/card/deposit", { amount })} className="inline-flex items-center justify-center gap-2 rounded-xl bg-brand px-4 py-3 font-bold"><CreditCard size={16} /> Sandbox Card Credit</button>}
+              {paymentAvailability.deposit.trc20 && depositMethod === "trc20" && <div className="rounded-xl bg-white/5 p-3 text-sm text-gray-300">Crypto deposits are reviewed before crediting. Send testnet funds only, then contact support with the transaction reference.</div>}
             </div>
           </>
         )}
         {section === "withdraw" && (
           <>
-            <div className="mb-4 grid grid-cols-2 gap-2 text-xs font-bold">
-              {(["mpesa", "trc20"] as const).map((item) => (
+            {withdrawMethods.length > 0 ? <div className="mb-4 grid grid-cols-2 gap-2 text-xs font-bold">
+              {withdrawMethods.map((item) => (
                 <button key={item} onClick={() => setWithdrawMethod(item)} className={`rounded-lg px-2 py-2 uppercase ${withdrawMethod === item ? "bg-brand" : "bg-white/5"}`}>{item}</button>
               ))}
-            </div>
-            {withdrawMethod === "mpesa" && <label className="mb-4 block text-sm font-medium">M-Pesa phone<input className="field mt-2" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="0712345678 or 254712345678" /></label>}
-            {withdrawMethod === "trc20" && <label className="mb-4 block text-sm font-medium">TRC20 wallet for withdrawal<input className="field mt-2" value={wallet} onChange={(e) => setWallet(e.target.value)} placeholder="T..." /></label>}
-            <button onClick={() => post("/api/withdrawals/submit", { amount, method: withdrawMethod, walletAddress: withdrawMethod === "trc20" ? wallet : phone })} className="mb-5 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-white/10 px-4 py-3 font-bold"><Banknote size={16} /> Submit Withdrawal</button>
+            </div> : <div className="mb-4 rounded-xl bg-white/5 p-3 text-sm text-gray-300">Withdrawals are currently disabled by admin.</div>}
+            {paymentAvailability.withdraw.mpesa && withdrawMethod === "mpesa" && <label className="mb-4 block text-sm font-medium">M-Pesa phone<input className="field mt-2" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="0712345678 or 254712345678" /></label>}
+            {paymentAvailability.withdraw.trc20 && withdrawMethod === "trc20" && <label className="mb-4 block text-sm font-medium">TRC20 wallet for withdrawal<input className="field mt-2" value={wallet} onChange={(e) => setWallet(e.target.value)} placeholder="T..." /></label>}
+            {withdrawMethods.length > 0 && <button onClick={() => post("/api/withdrawals/submit", { amount, method: withdrawMethod, walletAddress: withdrawMethod === "trc20" ? wallet : phone })} className="mb-5 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-white/10 px-4 py-3 font-bold"><Banknote size={16} /> Submit Withdrawal</button>}
           </>
         )}
         {notice && <div className="mb-5 rounded-xl bg-white/5 p-3 text-sm text-gray-300">{notice}{checkoutUrl && <a className="mt-2 block font-bold text-brand" href={checkoutUrl} target="_blank">Open checkout</a>}</div>}

@@ -13,6 +13,7 @@ const editableKeys = new Set([
   "payments.minWithdrawal",
   "payments.withdrawalReview",
   "mpesa.enabled",
+  "mpesa.withdrawals.enabled",
   "mpesa.environment",
   "mpesa.shortCode",
   "mpesa.transactionType",
@@ -26,6 +27,9 @@ const editableKeys = new Set([
   "paystack.secretKey",
   "paystack.currency",
   "paystack.callbackUrl",
+  "card.enabled",
+  "trc20.enabled",
+  "trc20.withdrawals.enabled",
 ]);
 
 export async function GET(request: NextRequest) {

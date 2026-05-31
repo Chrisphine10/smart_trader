@@ -534,6 +534,10 @@ export function reviewKyc(adminId: string, submissionId: string, status: "approv
 }
 
 export function submitWithdrawal(user: User, method: string, amount: number, walletAddress?: string) {
+  const normalizedMethod = method.toLowerCase();
+  if (!["mpesa", "trc20"].includes(normalizedMethod)) throw new Error("Unsupported withdrawal method");
+  if (normalizedMethod === "mpesa" && getAppSetting("mpesa.withdrawals.enabled", "true") !== "true") throw new Error("M-Pesa withdrawals are disabled by admin");
+  if (normalizedMethod === "trc20" && getAppSetting("trc20.withdrawals.enabled", "true") !== "true") throw new Error("TRC20 withdrawals are disabled by admin");
   const minWithdrawal = Number(getAppSetting("payments.minWithdrawal", "1"));
   if (amount < minWithdrawal) throw new Error(`Minimum withdrawal is $${minWithdrawal}`);
   const isDemo = Boolean(user.is_demo);
@@ -551,8 +555,8 @@ export function submitWithdrawal(user: User, method: string, amount: number, wal
   const next = money(currentBalance - amount);
   db.exec("BEGIN");
   try {
-    db.prepare("INSERT INTO withdrawals (id, user_id, method, amount, wallet_address, status, completed_at, is_demo) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run(id, user.id, method, amount, walletAddress ?? null, isDemo ? "completed" : "pending", isDemo ? new Date().toISOString() : null, isDemo ? 1 : 0);
-    db.prepare("INSERT INTO transactions (id, user_id, type, amount, balance_after, description) VALUES (?, ?, 'withdrawal', ?, ?, ?)").run(randomUUID(), user.id, -amount, next, `${isDemo ? "Sandbox demo" : "Manual review"} ${method} withdrawal submitted`);
+    db.prepare("INSERT INTO withdrawals (id, user_id, method, amount, wallet_address, status, completed_at, is_demo) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run(id, user.id, normalizedMethod, amount, walletAddress ?? null, isDemo ? "completed" : "pending", isDemo ? new Date().toISOString() : null, isDemo ? 1 : 0);
+    db.prepare("INSERT INTO transactions (id, user_id, type, amount, balance_after, description) VALUES (?, ?, 'withdrawal', ?, ?, ?)").run(randomUUID(), user.id, -amount, next, `${isDemo ? "Sandbox demo" : "Manual review"} ${normalizedMethod} withdrawal submitted`);
     updateUserBalance(user, isDemo, next);
     db.exec("COMMIT");
   } catch (error) {
