@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import { db, verifyToken } from "../../../../lib/db";
 import { error, handleRoute, json, readBody } from "../../../../lib/http";
-import { listAppSettings, updateAppSettings } from "../../../../lib/repositories";
+import { listAppSettings, listCryptoNetworks, updateAppSettings, updateCryptoNetworkSettings } from "../../../../lib/repositories";
 
 export const runtime = "nodejs";
 
@@ -35,7 +35,7 @@ const editableKeys = new Set([
 export async function GET(request: NextRequest) {
   return handleRoute(async () => {
     if (!isAdmin(request)) return error("Unauthorized", 401);
-    return json({ settings: maskSecrets(listAppSettings()) });
+    return json({ settings: maskSecrets(listAppSettings()), cryptoNetworks: listCryptoNetworks(true) });
   });
 }
 
@@ -50,7 +50,9 @@ export async function POST(request: NextRequest) {
       if ((key.includes("Secret") || key.includes("passkey") || key.endsWith("secretKey")) && stringValue === "********") return;
       values[key] = stringValue;
     });
-    return json({ success: true, settings: maskSecrets(updateAppSettings(values)) });
+    updateAppSettings(values);
+    const cryptoNetworks = Array.isArray(body.cryptoNetworks) ? updateCryptoNetworkSettings(body.cryptoNetworks as Array<{ id?: string; assetSymbol?: string; network?: string; depositEnabled?: boolean; withdrawEnabled?: boolean }>) : listCryptoNetworks(true);
+    return json({ success: true, settings: maskSecrets(listAppSettings()), cryptoNetworks });
   });
 }
 

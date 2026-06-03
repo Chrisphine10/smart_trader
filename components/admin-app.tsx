@@ -7,10 +7,24 @@ import { Logo } from "./logo";
 import { PublicThemeShell } from "./public-theme-shell";
 import { PublicThemeToggle } from "./public-theme-toggle";
 
+type AdminCryptoNetwork = {
+  id: string;
+  assetSymbol: string;
+  assetName: string;
+  network: string;
+  chainName: string;
+  testnet: boolean;
+  depositEnabled: boolean;
+  withdrawEnabled: boolean;
+  fee: number;
+  minWithdraw: number;
+};
+
 export function AdminApp() {
   const [stats, setStats] = useState<any>(null);
   const [admin, setAdmin] = useState<any>(null);
   const [settings, setSettings] = useState<Record<string, string>>({});
+  const [cryptoNetworks, setCryptoNetworks] = useState<AdminCryptoNetwork[]>([]);
   const [riskSettings, setRiskSettings] = useState<Record<string, string>>({});
   const [notice, setNotice] = useState("");
   const [tab, setTab] = useState<"overview" | "support" | "payments" | "kyc" | "risk" | "p2p">("overview");
@@ -48,6 +62,7 @@ export function AdminApp() {
       setAdmin(me.admin);
       setStats(stat.stats);
       setSettings(pay.settings ?? {});
+      setCryptoNetworks(pay.cryptoNetworks ?? []);
       setPaymentOps(payments.payments ?? { deposits: [], withdrawals: [] });
       setRiskSettings(risk.settings ?? {});
       setKycSubmissions(kyc.submissions ?? []);
@@ -97,11 +112,12 @@ export function AdminApp() {
     const response = await fetch("/api/admin/payment-settings", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify(settings),
+      body: JSON.stringify({ ...settings, cryptoNetworks }),
     });
     const data = await response.json();
     setNotice(data.success ? "Payment settings saved" : data.error ?? "Unable to save settings");
     if (data.settings) setSettings(data.settings);
+    if (data.cryptoNetworks) setCryptoNetworks(data.cryptoNetworks);
   }
 
   async function loadPayments(currentToken = token) {
@@ -137,6 +153,10 @@ export function AdminApp() {
 
   function update(key: string, value: string) {
     setSettings((current) => ({ ...current, [key]: value }));
+  }
+
+  function updateCryptoNetwork(id: string, key: "depositEnabled" | "withdrawEnabled", value: boolean) {
+    setCryptoNetworks((current) => current.map((item) => item.id === id ? { ...item, [key]: value } : item));
   }
 
   function updateRisk(key: string, value: string) {
@@ -218,78 +238,7 @@ export function AdminApp() {
         {tab === "payments" && (
           <section className="grid gap-4">
             <PaymentOperations payments={paymentOps} notes={paymentNotes} reference={paymentReference} setNotes={setPaymentNotes} setReference={setPaymentReference} onRefresh={() => loadPayments()} onReview={reviewPayment} />
-            <div className="grid gap-4 lg:grid-cols-[0.95fr_1.05fr]">
-            <div className="glass rounded-2xl p-5">
-              <div className="mb-5 flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-bold text-brand">Payment Mode</p>
-                  <h2 className="text-2xl font-black">Provider Setup</h2>
-                </div>
-                <CreditCard className="text-brand" />
-              </div>
-              <label className="mb-4 block text-sm font-medium">Mode
-                <select className="field mt-2" value={settings["payments.mode"] ?? "sandbox"} onChange={(e) => update("payments.mode", e.target.value)}>
-                  <option value="sandbox">Sandbox credit instantly</option>
-                  <option value="live">Live provider requests</option>
-                </select>
-              </label>
-              <div className="grid gap-4 md:grid-cols-2">
-                <Field label="Wallet currency" value={settings["payments.currency"]} onChange={(value) => update("payments.currency", value)} />
-                <Field label="USD to KES rate" value={settings["payments.usdKesRate"]} onChange={(value) => update("payments.usdKesRate", value)} />
-                <Field label="Minimum deposit USD" value={settings["payments.minDeposit"]} onChange={(value) => update("payments.minDeposit", value)} />
-                <Field label="Minimum withdrawal USD" value={settings["payments.minWithdrawal"]} onChange={(value) => update("payments.minWithdrawal", value)} />
-                <ToggleField label="Withdrawal review required" value={settings["payments.withdrawalReview"]} onChange={(value) => update("payments.withdrawalReview", value)} />
-              </div>
-              <div className="mt-4 rounded-xl bg-white/5 p-4 text-sm text-gray-300">
-                Sandbox mode lets users fund their real wallet instantly for local testing. Live mode creates Daraja STK pushes or Paystack checkout sessions and keeps deposits pending until callbacks or verification are added.
-              </div>
-            </div>
-
-            <div className="grid gap-4">
-              <ProviderPanel icon={<Smartphone />} title="M-Pesa Daraja">
-                <div className="grid gap-4 md:grid-cols-2">
-                  <ToggleField label="Deposits enabled" value={settings["mpesa.enabled"]} onChange={(value) => update("mpesa.enabled", value)} />
-                  <ToggleField label="Withdrawals enabled" value={settings["mpesa.withdrawals.enabled"]} onChange={(value) => update("mpesa.withdrawals.enabled", value)} />
-                  <Field label="Environment" value={settings["mpesa.environment"]} onChange={(value) => update("mpesa.environment", value)} />
-                  <Field label="Short code" value={settings["mpesa.shortCode"]} onChange={(value) => update("mpesa.shortCode", value)} />
-                  <Field label="Transaction type" value={settings["mpesa.transactionType"]} onChange={(value) => update("mpesa.transactionType", value)} />
-                  <Field label="Account reference" value={settings["mpesa.accountReference"]} onChange={(value) => update("mpesa.accountReference", value)} />
-                  <Field label="Callback URL" value={settings["mpesa.callbackUrl"]} onChange={(value) => update("mpesa.callbackUrl", value)} />
-                  <Field label="Consumer key" value={settings["mpesa.consumerKey"]} onChange={(value) => update("mpesa.consumerKey", value)} />
-                  <Field label="Consumer secret" value={settings["mpesa.consumerSecret"]} onChange={(value) => update("mpesa.consumerSecret", value)} password />
-                  <Field label="Passkey" value={settings["mpesa.passkey"]} onChange={(value) => update("mpesa.passkey", value)} password />
-                </div>
-              </ProviderPanel>
-
-              <ProviderPanel icon={<CreditCard />} title="Paystack">
-                <div className="grid gap-4 md:grid-cols-2">
-                  <ToggleField label="Deposits enabled" value={settings["paystack.enabled"]} onChange={(value) => update("paystack.enabled", value)} />
-                  <Field label="Currency" value={settings["paystack.currency"]} onChange={(value) => update("paystack.currency", value)} />
-                  <Field label="Public key" value={settings["paystack.publicKey"]} onChange={(value) => update("paystack.publicKey", value)} />
-                  <Field label="Secret key" value={settings["paystack.secretKey"]} onChange={(value) => update("paystack.secretKey", value)} password />
-                  <Field label="Callback URL" value={settings["paystack.callbackUrl"]} onChange={(value) => update("paystack.callbackUrl", value)} />
-                </div>
-              </ProviderPanel>
-
-              <ProviderPanel icon={<CreditCard />} title="Card">
-                <div className="grid gap-4 md:grid-cols-2">
-                  <ToggleField label="Deposits enabled" value={settings["card.enabled"]} onChange={(value) => update("card.enabled", value)} />
-                </div>
-                <div className="mt-4 rounded-xl bg-white/5 p-3 text-sm text-gray-300">Card deposits credit real accounts in sandbox mode. In live mode, use Paystack for card checkout until a direct card provider is configured.</div>
-              </ProviderPanel>
-
-              <ProviderPanel icon={<Wallet />} title="TRC20">
-                <div className="grid gap-4 md:grid-cols-2">
-                  <ToggleField label="Deposits enabled" value={settings["trc20.enabled"]} onChange={(value) => update("trc20.enabled", value)} />
-                  <ToggleField label="Withdrawals enabled" value={settings["trc20.withdrawals.enabled"]} onChange={(value) => update("trc20.withdrawals.enabled", value)} />
-                </div>
-              </ProviderPanel>
-            </div>
-            <div className="lg:col-span-2">
-              <button onClick={saveSettings} className="inline-flex items-center gap-2 rounded-xl bg-brand px-5 py-3 font-bold"><Save size={17} /> Save Payment Setup</button>
-              {notice && <span className="ml-4 text-sm text-gray-300">{notice}</span>}
-            </div>
-            </div>
+            <PaymentSetup settings={settings} cryptoNetworks={cryptoNetworks} notice={notice} onUpdate={update} onUpdateCryptoNetwork={updateCryptoNetwork} onSave={saveSettings} />
           </section>
         )}
         {tab === "p2p" && <P2POperations disputes={p2pDisputes} notes={p2pNotes} setNotes={setP2pNotes} onRefresh={() => loadP2pDisputes()} onResolve={resolveP2p} />}
@@ -298,6 +247,169 @@ export function AdminApp() {
       </div>
     </div>
     </PublicThemeShell>
+  );
+}
+
+function PaymentSetup({ settings, cryptoNetworks, notice, onUpdate, onUpdateCryptoNetwork, onSave }: { settings: Record<string, string>; cryptoNetworks: AdminCryptoNetwork[]; notice: string; onUpdate: (key: string, value: string) => void; onUpdateCryptoNetwork: (id: string, key: "depositEnabled" | "withdrawEnabled", value: boolean) => void; onSave: () => void }) {
+  const fiatDepositCount = [
+    settings["mpesa.enabled"] !== "false",
+    settings["paystack.enabled"] !== "false",
+    settings["card.enabled"] !== "false",
+  ].filter(Boolean).length;
+  const web3DepositCount = cryptoNetworks.filter((item) => item.depositEnabled).length;
+  const web3WithdrawCount = cryptoNetworks.filter((item) => item.withdrawEnabled).length;
+
+  return (
+    <section className="glass rounded-2xl p-5">
+      <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-bold text-brand">Payment Setup</p>
+          <h2 className="text-2xl font-black">Rails & Provider Controls</h2>
+        </div>
+        <div className="flex flex-wrap items-center gap-3">
+          {notice && <span className="rounded-xl bg-white/5 px-3 py-2 text-xs font-bold text-gray-300">{notice}</span>}
+          <button onClick={onSave} className="inline-flex items-center gap-2 rounded-xl bg-brand px-5 py-3 font-bold"><Save size={17} /> Save Setup</button>
+        </div>
+      </div>
+
+      <div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <PaymentStatusCard label="Mode" value={settings["payments.mode"] === "live" ? "Live" : "Sandbox"} detail={settings["payments.mode"] === "live" ? "Provider requests" : "Instant test credits"} />
+        <PaymentStatusCard label="Currency" value={settings["payments.currency"] || "KES"} detail={`USD/KES ${settings["payments.usdKesRate"] || "129.09"}`} />
+        <PaymentStatusCard label="Fiat deposits" value={`${fiatDepositCount}/3`} detail="M-Pesa, Paystack, Card" />
+        <PaymentStatusCard label="Web3 rails" value={`${web3DepositCount}/${cryptoNetworks.length}`} detail={`${web3WithdrawCount} withdrawal rails`} />
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
+        <div className="grid gap-4">
+          <SetupCard icon={<CreditCard />} title="Core Rules" description="Wallet currency, review mode, and amount limits.">
+            <label className="block text-sm font-medium">Mode
+              <select className="field mt-2" value={settings["payments.mode"] ?? "sandbox"} onChange={(event) => onUpdate("payments.mode", event.target.value)}>
+                <option value="sandbox">Sandbox credit instantly</option>
+                <option value="live">Live provider requests</option>
+              </select>
+            </label>
+            <div className="mt-4 grid gap-4 sm:grid-cols-2">
+              <Field label="Wallet currency" value={settings["payments.currency"]} onChange={(value) => onUpdate("payments.currency", value)} />
+              <Field label="USD to KES rate" value={settings["payments.usdKesRate"]} onChange={(value) => onUpdate("payments.usdKesRate", value)} />
+              <Field label="Minimum deposit USD" value={settings["payments.minDeposit"]} onChange={(value) => onUpdate("payments.minDeposit", value)} />
+              <Field label="Minimum withdrawal USD" value={settings["payments.minWithdrawal"]} onChange={(value) => onUpdate("payments.minWithdrawal", value)} />
+            </div>
+            <div className="mt-4 rounded-xl border border-white/10 bg-white/5 p-3">
+              <TogglePill label="Withdrawal review required" enabled={settings["payments.withdrawalReview"] !== "false"} onChange={(enabled) => onUpdate("payments.withdrawalReview", enabled ? "true" : "false")} />
+            </div>
+          </SetupCard>
+
+          <SetupCard icon={<CreditCard />} title="Card Sandbox" description="Direct card credits for local testing.">
+            <div className="grid gap-3">
+              <TogglePill label="Card deposits" enabled={settings["card.enabled"] !== "false"} onChange={(enabled) => onUpdate("card.enabled", enabled ? "true" : "false")} />
+              <div className="rounded-xl bg-white/5 p-3 text-sm text-gray-300">Live card checkout should route through a configured provider such as Paystack.</div>
+            </div>
+          </SetupCard>
+        </div>
+
+        <div className="grid gap-4">
+          <SetupCard icon={<Smartphone />} title="M-Pesa Daraja" description="Mobile money deposits and withdrawal requests.">
+            <div className="mb-4 grid gap-3 sm:grid-cols-2">
+              <TogglePill label="Deposits" enabled={settings["mpesa.enabled"] !== "false"} onChange={(enabled) => onUpdate("mpesa.enabled", enabled ? "true" : "false")} />
+              <TogglePill label="Withdrawals" enabled={settings["mpesa.withdrawals.enabled"] !== "false"} onChange={(enabled) => onUpdate("mpesa.withdrawals.enabled", enabled ? "true" : "false")} />
+            </div>
+            <div className="grid gap-4 md:grid-cols-2">
+              <Field label="Environment" value={settings["mpesa.environment"]} onChange={(value) => onUpdate("mpesa.environment", value)} />
+              <Field label="Short code" value={settings["mpesa.shortCode"]} onChange={(value) => onUpdate("mpesa.shortCode", value)} />
+              <Field label="Transaction type" value={settings["mpesa.transactionType"]} onChange={(value) => onUpdate("mpesa.transactionType", value)} />
+              <Field label="Account reference" value={settings["mpesa.accountReference"]} onChange={(value) => onUpdate("mpesa.accountReference", value)} />
+              <Field label="Callback URL" value={settings["mpesa.callbackUrl"]} onChange={(value) => onUpdate("mpesa.callbackUrl", value)} />
+              <Field label="Consumer key" value={settings["mpesa.consumerKey"]} onChange={(value) => onUpdate("mpesa.consumerKey", value)} />
+              <Field label="Consumer secret" value={settings["mpesa.consumerSecret"]} onChange={(value) => onUpdate("mpesa.consumerSecret", value)} password />
+              <Field label="Passkey" value={settings["mpesa.passkey"]} onChange={(value) => onUpdate("mpesa.passkey", value)} password />
+            </div>
+          </SetupCard>
+
+          <SetupCard icon={<CreditCard />} title="Paystack" description="Hosted checkout and card-backed deposits.">
+            <div className="mb-4">
+              <TogglePill label="Paystack deposits" enabled={settings["paystack.enabled"] !== "false"} onChange={(enabled) => onUpdate("paystack.enabled", enabled ? "true" : "false")} />
+            </div>
+            <div className="grid gap-4 md:grid-cols-2">
+              <Field label="Currency" value={settings["paystack.currency"]} onChange={(value) => onUpdate("paystack.currency", value)} />
+              <Field label="Public key" value={settings["paystack.publicKey"]} onChange={(value) => onUpdate("paystack.publicKey", value)} />
+              <Field label="Secret key" value={settings["paystack.secretKey"]} onChange={(value) => onUpdate("paystack.secretKey", value)} password />
+              <Field label="Callback URL" value={settings["paystack.callbackUrl"]} onChange={(value) => onUpdate("paystack.callbackUrl", value)} />
+            </div>
+          </SetupCard>
+        </div>
+      </div>
+
+      <SetupCard icon={<Wallet />} title="Web3 Networks" description="Manual-review crypto deposit and withdrawal rails.">
+        {cryptoNetworks.length === 0 ? (
+          <div className="rounded-xl bg-white/5 p-3 text-sm text-gray-300">No exchange networks are configured.</div>
+        ) : (
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {cryptoNetworks.map((item) => (
+              <article key={item.id} className="rounded-xl border border-white/10 bg-white/5 p-4">
+                <div className="mb-3 flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <h3 className="truncate font-black">{item.assetSymbol} {item.network}</h3>
+                    <p className="mt-1 line-clamp-2 text-xs text-gray-400">{item.chainName} - {item.testnet ? "testnet" : "live"}</p>
+                  </div>
+                  <span className="shrink-0 rounded-lg bg-black/20 px-2 py-1 text-[10px] font-bold text-gray-300">{item.assetName}</span>
+                </div>
+                <div className="mb-3 grid grid-cols-2 gap-2 text-[11px]">
+                  <div className="rounded-lg bg-black/20 p-2"><div className="text-gray-500">Fee</div><div className="font-black">{item.fee}</div></div>
+                  <div className="rounded-lg bg-black/20 p-2"><div className="text-gray-500">Min</div><div className="font-black">{item.minWithdraw}</div></div>
+                </div>
+                <div className="grid gap-2">
+                  <TogglePill label="Deposit" enabled={item.depositEnabled} onChange={(enabled) => onUpdateCryptoNetwork(item.id, "depositEnabled", enabled)} compact />
+                  <TogglePill label="Withdraw" enabled={item.withdrawEnabled} onChange={(enabled) => onUpdateCryptoNetwork(item.id, "withdrawEnabled", enabled)} compact />
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+      </SetupCard>
+    </section>
+  );
+}
+
+function PaymentStatusCard({ label, value, detail }: { label: string; value: string; detail: string }) {
+  return (
+    <div className="rounded-xl border border-white/10 bg-white/5 p-4">
+      <div className="text-xs font-bold uppercase tracking-wide text-gray-500">{label}</div>
+      <div className="mt-1 text-2xl font-black">{value}</div>
+      <div className="mt-1 truncate text-xs text-gray-400">{detail}</div>
+    </div>
+  );
+}
+
+function SetupCard({ icon, title, description, children }: { icon: React.ReactNode; title: string; description: string; children: React.ReactNode }) {
+  return (
+    <section className="rounded-2xl border border-white/10 bg-[#0b0f16] p-5">
+      <div className="mb-4 flex items-start gap-3">
+        <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-brand/15 text-brand">{icon}</div>
+        <div className="min-w-0">
+          <h3 className="text-lg font-black">{title}</h3>
+          <p className="mt-1 text-sm text-gray-400">{description}</p>
+        </div>
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function TogglePill({ label, enabled, onChange, compact = false }: { label: string; enabled: boolean; onChange: (enabled: boolean) => void; compact?: boolean }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onChange(!enabled)}
+      className={`flex w-full items-center justify-between rounded-xl border font-bold transition ${compact ? "h-9 px-2.5 text-xs" : "h-11 px-3 text-sm"} ${enabled ? "border-emerald-400/35 bg-emerald-400/10 text-emerald-300" : "border-white/10 bg-white/5 text-gray-400 hover:bg-white/10"}`}
+    >
+      <span>{label}</span>
+      <span className="flex items-center gap-2">
+        <span>{enabled ? "On" : "Off"}</span>
+        <span className={`relative h-5 w-9 rounded-full ${enabled ? "bg-emerald-400" : "bg-white/20"}`}>
+          <span className={`absolute top-1 h-3 w-3 rounded-full bg-white transition ${enabled ? "left-5" : "left-1"}`} />
+        </span>
+      </span>
+    </button>
   );
 }
 
@@ -391,6 +503,16 @@ function PaymentOperations({ payments, notes, reference, setNotes, setReference,
   );
 }
 
+function paymentMethodLabel(method: string) {
+  if (method.startsWith("crypto:")) {
+    const [, asset, network] = method.split(":");
+    return `${asset ?? "Crypto"} ${network ?? ""}`.trim();
+  }
+  if (method === "mpesa") return "M-Pesa";
+  if (method === "trc20") return "USDT TRC20";
+  return method.toUpperCase();
+}
+
 function PaymentTable({ title, kind, rows, onReview }: { title: string; kind: "deposits" | "withdrawals"; rows: any[]; onReview: (kind: "deposits" | "withdrawals", id: string, action: "approve" | "reject") => void }) {
   return (
     <div className="rounded-2xl border border-white/10 bg-[#0b0f16] p-4">
@@ -405,7 +527,7 @@ function PaymentTable({ title, kind, rows, onReview }: { title: string; kind: "d
             <div className="flex flex-wrap items-start justify-between gap-2">
               <div>
                 <div className="font-black">{item.username} <span className="font-normal text-gray-500">{item.email}</span></div>
-                <div className="mt-1 text-xs text-gray-400">{String(item.method).toUpperCase()} - ${Number(item.amount).toFixed(2)} - {item.created_at}</div>
+                <div className="mt-1 text-xs text-gray-400">{paymentMethodLabel(String(item.method))} - ${Number(item.amount).toFixed(2)} - {item.created_at}</div>
                 <div className="mt-1 break-all text-xs text-gray-500">Ref: {item.reference ?? item.provider_reference ?? item.wallet_address ?? "none"}</div>
               </div>
               <span className={`rounded-lg px-2 py-1 text-xs font-bold ${item.status === "completed" ? "bg-emerald-500/15 text-emerald-300" : item.status === "rejected" ? "bg-rose-500/15 text-rose-300" : "bg-amber-500/15 text-amber-300"}`}>{item.status}</span>
@@ -548,40 +670,10 @@ function RiskPanel({ settings, onChange, onSave, notice }: { settings: Record<st
   );
 }
 
-function ProviderPanel({ icon, title, children }: { icon: React.ReactNode; title: string; children: React.ReactNode }) {
-  return (
-    <section className="glass rounded-2xl p-5">
-      <div className="mb-5 flex items-center gap-3">
-        <div className="text-brand">{icon}</div>
-        <h2 className="text-xl font-black">{title}</h2>
-      </div>
-      {children}
-    </section>
-  );
-}
-
 function Field({ label, value, onChange, password }: { label: string; value?: string; onChange: (value: string) => void; password?: boolean }) {
   return (
     <label className="block text-sm font-medium">{label}
       <input className="field mt-2" type={password ? "password" : "text"} value={value ?? ""} onChange={(event) => onChange(event.target.value)} />
-    </label>
-  );
-}
-
-function ToggleField({ label, value, onChange }: { label: string; value?: string; onChange: (value: string) => void }) {
-  const enabled = value !== "false";
-  return (
-    <label className="block text-sm font-medium">{label}
-      <button
-        type="button"
-        onClick={() => onChange(enabled ? "false" : "true")}
-        className={`mt-2 flex h-11 w-full items-center justify-between rounded-xl border px-3 font-bold ${enabled ? "border-emerald-400/35 bg-emerald-400/10 text-emerald-300" : "border-white/10 bg-white/5 text-gray-400"}`}
-      >
-        <span>{enabled ? "On" : "Off"}</span>
-        <span className={`relative h-6 w-11 rounded-full ${enabled ? "bg-emerald-400" : "bg-white/20"}`}>
-          <span className={`absolute top-1 h-4 w-4 rounded-full bg-white transition ${enabled ? "left-6" : "left-1"}`} />
-        </span>
-      </button>
     </label>
   );
 }

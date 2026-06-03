@@ -8,21 +8,38 @@ import { PublicThemeShell } from "./public-theme-shell";
 import { PublicThemeToggle } from "./public-theme-toggle";
 
 type SettingsTab = "profile" | "security" | "payments" | "preferences";
+type CryptoNetworkOption = {
+  id: string;
+  assetSymbol: string;
+  assetName: string;
+  network: string;
+  chainName: string;
+  testnet: boolean;
+  depositEnabled: boolean;
+  withdrawEnabled: boolean;
+  fee: number;
+  minWithdraw: number;
+};
+type CryptoAddressOption = CryptoNetworkOption & {
+  address: string;
+};
 type PaymentAvailability = {
   deposit: Record<"mpesa" | "paystack" | "card" | "trc20", boolean>;
   withdraw: Record<"mpesa" | "trc20", boolean>;
+  cryptoNetworks: CryptoNetworkOption[];
 };
 
 const defaultPaymentAvailability: PaymentAvailability = {
   deposit: { mpesa: true, paystack: true, card: true, trc20: true },
   withdraw: { mpesa: true, trc20: true },
+  cryptoNetworks: [],
 };
 
 export function SettingsApp() {
   const [user, setUser] = useState<any>(null);
   const [tab, setTab] = useState<SettingsTab>("profile");
   const [notice, setNotice] = useState("");
-  const [trc20Address, setTrc20Address] = useState("");
+  const [cryptoAddresses, setCryptoAddresses] = useState<CryptoAddressOption[]>([]);
   const [exchangeRate, setExchangeRate] = useState(129.09);
   const [paymentAvailability, setPaymentAvailability] = useState<PaymentAvailability>(defaultPaymentAvailability);
   const [kycForm, setKycForm] = useState({ fullName: "", documentType: "national_id", documentNumber: "", country: "KE", notes: "" });
@@ -36,12 +53,13 @@ export function SettingsApp() {
     }
     const headers = { Authorization: `Bearer ${token}` };
     fetch("/api/auth/me", { headers }).then((response) => response.json()).then((data) => setUser(data.user));
-    fetch("/api/auth/trc20/my-address", { headers }).then((response) => response.json()).then((data) => setTrc20Address(data.address ?? "")).catch(() => undefined);
+    fetch("/api/auth/crypto/addresses", { headers }).then((response) => response.json()).then((data) => setCryptoAddresses(data.addresses ?? [])).catch(() => undefined);
     fetch("/api/auth/exchange-rate", { headers }).then((response) => response.json()).then((data) => setExchangeRate(Number(data.rate ?? 129.09))).catch(() => undefined);
     fetch("/api/auth/payment-methods", { headers }).then((response) => response.json()).then((data) => {
       setPaymentAvailability({
         deposit: { ...defaultPaymentAvailability.deposit, ...(data.deposit ?? {}) },
         withdraw: { ...defaultPaymentAvailability.withdraw, ...(data.withdraw ?? {}) },
+        cryptoNetworks: data.cryptoNetworks ?? [],
       });
     }).catch(() => undefined);
     const saved = localStorage.getItem("hydratrade.preferences");
@@ -63,11 +81,11 @@ export function SettingsApp() {
     paymentAvailability.deposit.mpesa ? "M-Pesa" : null,
     paymentAvailability.deposit.paystack ? "Paystack" : null,
     paymentAvailability.deposit.card ? "Card" : null,
-    paymentAvailability.deposit.trc20 ? "TRC20" : null,
+    paymentAvailability.cryptoNetworks.filter((item) => item.depositEnabled).length ? `Web3 (${paymentAvailability.cryptoNetworks.filter((item) => item.depositEnabled).length} networks)` : null,
   ].filter(Boolean).join(", ") || "Disabled", [paymentAvailability]);
   const withdrawalMethods = useMemo(() => [
     paymentAvailability.withdraw.mpesa ? "M-Pesa" : null,
-    paymentAvailability.withdraw.trc20 ? "TRC20" : null,
+    paymentAvailability.cryptoNetworks.filter((item) => item.withdrawEnabled).length ? `Web3 (${paymentAvailability.cryptoNetworks.filter((item) => item.withdrawEnabled).length} networks)` : null,
   ].filter(Boolean).join(", ") || "Disabled", [paymentAvailability]);
 
   function savePreferences() {
@@ -189,13 +207,18 @@ export function SettingsApp() {
               <div className="grid gap-3 md:grid-cols-3">
                 <Metric label="USD/KES rate" value={exchangeRate.toFixed(2)} />
                 <Metric label="M-Pesa" value={user?.mpesa_phone ?? "Not set"} />
-                <Metric label="TRC20" value={paymentAvailability.deposit.trc20 ? trc20Address ? "Ready" : "Loading" : "Disabled"} />
+                <Metric label="Web3" value={cryptoAddresses.length ? `${cryptoAddresses.length} ready` : "Disabled"} />
               </div>
-              {paymentAvailability.deposit.trc20 && (
-                <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
-                  <div className="mb-2 text-xs font-bold uppercase tracking-wider text-gray-500">TRC20 deposit address</div>
-                  <div className="break-all font-mono text-sm text-brand">{trc20Address || "Loading address..."}</div>
-                  <button onClick={() => trc20Address && navigator.clipboard?.writeText(trc20Address).then(() => setNotice("TRC20 address copied"))} className="mt-3 inline-flex items-center gap-2 rounded-xl bg-white/10 px-3 py-2 text-xs font-bold"><Copy size={14} /> Copy address</button>
+              {cryptoAddresses.length > 0 && (
+                <div className="mt-4 grid gap-3">
+                  {cryptoAddresses.map((item) => (
+                    <div key={`${item.assetSymbol}-${item.network}`} className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                      <div className="mb-2 text-xs font-bold uppercase tracking-wider text-gray-500">{cryptoNetworkLabel(item)} deposit address</div>
+                      <div className="break-all font-mono text-sm text-brand">{item.address}</div>
+                      <div className="mt-2 text-xs text-gray-400">{item.chainName} - {item.testnet ? "testnet only" : "live network"}</div>
+                      <button onClick={() => navigator.clipboard?.writeText(item.address).then(() => setNotice(`${cryptoNetworkLabel(item)} address copied`))} className="mt-3 inline-flex items-center gap-2 rounded-xl bg-white/10 px-3 py-2 text-xs font-bold"><Copy size={14} /> Copy address</button>
+                    </div>
+                  ))}
                 </div>
               )}
               <div className="mt-4 grid gap-3 md:grid-cols-2">
@@ -223,6 +246,10 @@ export function SettingsApp() {
     </div>
     </PublicThemeShell>
   );
+}
+
+function cryptoNetworkLabel(network: Pick<CryptoNetworkOption, "assetSymbol" | "network">) {
+  return `${network.assetSymbol} ${network.network}`;
 }
 
 function Panel({ icon, eyebrow, title, children }: { icon: React.ReactNode; eyebrow: string; title: string; children: React.ReactNode }) {

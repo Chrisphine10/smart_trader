@@ -13,6 +13,15 @@ function createTradingUser(label: string): User {
   return db.prepare("SELECT * FROM users WHERE id = ?").get(id) as User;
 }
 
+function createDemoTradingUser(label: string): User {
+  const id = crypto.randomUUID();
+  db.prepare(`
+    INSERT INTO users (id, email, username, password_hash, balance, real_balance, demo_balance, is_demo, referral_code, trc20_address, kyc_status)
+    VALUES (?, ?, ?, ?, 1000, 0, 1000, 1, ?, ?, 'approved')
+  `).run(id, `${label}-${id}@example.test`, label, hashPassword("password123"), referralCode(), trc20Address());
+  return db.prepare("SELECT * FROM users WHERE id = ?").get(id) as User;
+}
+
 describe("trading math", () => {
   beforeAll(() => {
     migrate();
@@ -94,6 +103,42 @@ describe("trading math", () => {
     ]));
     const amountSum = transactions.reduce((sum, transaction) => Math.round((sum + transaction.amount) * 100) / 100, 0);
     expect(amountSum).toBe(30.94);
+  });
+
+  it("does not apply system escrow to demo wins", () => {
+    const user = createDemoTradingUser("demo-ledger-win");
+    createManualTrade(user, {
+      asset: "volatility_10_1s",
+      direction: "over",
+      stake: 25,
+      selectedDigit: 5,
+      isDemo: true,
+      durationTicks: 1,
+    }, {
+      asset: "volatility_10_1s",
+      price: 100,
+      lastDigit: 5,
+      sequence: 1,
+      timestamp: new Date(2026, 0, 1, 0, 0, 0).toISOString(),
+    });
+
+    const [closed] = settleOpenPositions(user.id, "volatility_10_1s", {
+      asset: "volatility_10_1s",
+      price: 101,
+      lastDigit: 7,
+      sequence: 2,
+      timestamp: new Date(2026, 0, 1, 0, 0, 1).toISOString(),
+    });
+
+    expect(closed).toMatchObject({ status: "won", profit_loss: 34.38, balance_after: 1034.38 });
+    const transactions = db.prepare("SELECT type, amount FROM transactions WHERE user_id = ?").all(user.id) as Array<{ type: string; amount: number }>;
+    expect(transactions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "stake", amount: -25 }),
+      expect.objectContaining({ type: "payout", amount: 59.38 }),
+    ]));
+    expect(transactions.some((transaction) => transaction.type === "system_escrow_fee")).toBe(false);
+    const amountSum = transactions.reduce((sum, transaction) => Math.round((sum + transaction.amount) * 100) / 100, 0);
+    expect(amountSum).toBe(34.38);
   });
 
   it("keeps low-payout differ wins profitable after escrow and rejects invalid trade input", () => {

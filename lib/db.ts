@@ -496,17 +496,41 @@ function seedExchange() {
   const assetStmt = db.prepare("INSERT OR IGNORE INTO exchange_assets (symbol, name, precision, enabled, withdraw_enabled, min_withdraw) VALUES (?, ?, ?, 1, ?, ?)");
   [
     ["USDT", "Tether USD", 6, 0, 5],
+    ["USDC", "USD Coin", 6, 0, 10],
     ["BTC", "Bitcoin", 8, 0, 0.0002],
     ["ETH", "Ethereum", 8, 0, 0.005],
+    ["BNB", "BNB", 8, 0, 0.01],
+    ["SOL", "Solana", 8, 0, 0.05],
+    ["XRP", "XRP", 6, 0, 10],
+    ["LTC", "Litecoin", 8, 0, 0.01],
+    ["DOGE", "Dogecoin", 8, 0, 10],
   ].forEach((asset) => assetStmt.run(...asset));
 
-  const networkStmt = db.prepare("INSERT OR IGNORE INTO exchange_networks (id, asset_symbol, network, chain_name, testnet, deposit_enabled, withdraw_enabled, fee, min_withdraw) VALUES (?, ?, ?, ?, 1, 1, 0, ?, ?)");
+  const networkStmt = db.prepare("INSERT OR IGNORE INTO exchange_networks (id, asset_symbol, network, chain_name, testnet, deposit_enabled, withdraw_enabled, fee, min_withdraw) VALUES (?, ?, ?, ?, 1, 1, ?, ?, ?)");
   [
-    ["USDT", "TRC20", "Tron Nile Testnet", 1, 5],
-    ["USDT", "ERC20", "Ethereum Sepolia", 3, 10],
-    ["BTC", "BTC", "Bitcoin Testnet", 0.00005, 0.0002],
-    ["ETH", "ETH", "Ethereum Sepolia", 0.001, 0.005],
-  ].forEach(([asset, network, chain, fee, min]) => networkStmt.run(randomUUID(), asset, network, chain, fee, min));
+    ["USDT", "TRC20", "Tron Nile Testnet", 1, 1, 5],
+    ["USDT", "ERC20", "Ethereum Sepolia", 1, 3, 10],
+    ["USDC", "ERC20", "Ethereum Sepolia", 1, 3, 10],
+    ["BTC", "BTC", "Bitcoin Testnet", 1, 0.00005, 0.0002],
+    ["ETH", "ETH", "Ethereum Sepolia", 1, 0.001, 0.005],
+    ["BNB", "BSC", "BNB Smart Chain Testnet", 1, 0.0005, 0.01],
+    ["SOL", "SOL", "Solana Devnet", 1, 0.00001, 0.05],
+    ["XRP", "XRP", "XRP Ledger Testnet", 1, 0.02, 10],
+    ["LTC", "LTC", "Litecoin Testnet", 1, 0.0001, 0.01],
+    ["DOGE", "DOGE", "Dogecoin Testnet", 1, 1, 10],
+  ].forEach(([asset, network, chain, withdrawEnabled, fee, min]) => networkStmt.run(randomUUID(), asset, network, chain, withdrawEnabled, fee, min));
+
+  const backfilled = db.prepare("SELECT value FROM app_settings WHERE key = 'cryptoNetworks.withdrawBackfilled.v1'").get();
+  if (!backfilled) {
+    db.prepare(`
+      UPDATE exchange_networks
+      SET withdraw_enabled = 1
+      WHERE (asset_symbol = 'USDT' AND network IN ('TRC20', 'ERC20'))
+         OR (asset_symbol = 'BTC' AND network = 'BTC')
+         OR (asset_symbol = 'ETH' AND network = 'ETH')
+    `).run();
+    db.prepare("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('cryptoNetworks.withdrawBackfilled.v1', 'true')").run();
+  }
 
   const marketStmt = db.prepare("INSERT OR IGNORE INTO exchange_markets (symbol, base_asset, quote_asset, price_precision, quantity_precision, min_notional, enabled) VALUES (?, ?, ?, ?, ?, ?, 1)");
   [

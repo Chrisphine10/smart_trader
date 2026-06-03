@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, ArrowDown, ArrowLeftRight, ArrowUp, Banknote, Bell, Bot, ChevronDown, CircleUserRound, Copy, CreditCard, Grid3X3, LogOut, Minus, Moon, Plus, Smartphone, Sun, Target, TrendingUp, Volume2, VolumeX, Wallet } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { AlertTriangle, ArrowDown, ArrowLeftRight, ArrowUp, Banknote, Bell, Bot, ChevronDown, CircleUserRound, Copy, CreditCard, Grid3X3, Loader2, LogOut, Minus, Moon, Plus, Smartphone, Sun, Target, TrendingUp, Volume2, VolumeX, Wallet } from "lucide-react";
 import { buildTimeframeHistory, chartTimeframes, timeframeBucketSize, type ChartTimeframe } from "../lib/chart-timeframes";
 import { assets, assetLabel, forexAssets, isForexAsset, payoutMultiplier, potentialPayout, type Direction } from "../lib/trading";
 import { Logo } from "./logo";
@@ -20,13 +20,32 @@ type User = {
   referral_code?: string;
 };
 
-type DepositMethod = "mpesa" | "paystack" | "card" | "trc20";
-type WithdrawMethod = "mpesa" | "trc20";
+type FiatDepositMethod = "mpesa" | "paystack" | "card";
+type LegacyDepositMethod = FiatDepositMethod | "trc20";
+type LegacyWithdrawMethod = "mpesa" | "trc20";
+type DepositMethod = FiatDepositMethod | "crypto";
+type WithdrawMethod = "mpesa" | "crypto";
+type CryptoNetworkOption = {
+  id: string;
+  assetSymbol: string;
+  assetName: string;
+  network: string;
+  chainName: string;
+  testnet: boolean;
+  depositEnabled: boolean;
+  withdrawEnabled: boolean;
+  fee: number;
+  minWithdraw: number;
+};
+type CryptoAddressOption = CryptoNetworkOption & {
+  address: string;
+};
 type PaymentAvailability = {
   mode: "sandbox" | "live";
   currency: string;
-  deposit: Record<DepositMethod, boolean>;
-  withdraw: Record<WithdrawMethod, boolean>;
+  deposit: Record<LegacyDepositMethod, boolean>;
+  withdraw: Record<LegacyWithdrawMethod, boolean>;
+  cryptoNetworks: CryptoNetworkOption[];
 };
 
 type Tick = {
@@ -39,6 +58,17 @@ type Tick = {
   digitStats?: Record<string, number>;
   movement?: number;
   volatility?: number;
+};
+
+type DigitStat = { digit: number; count: number; percentage: number };
+type DigitMeasures = {
+  total: number;
+  hot: DigitStat;
+  cold: DigitStat;
+  evenShare: number;
+  oddShare: number;
+  belowShare: number;
+  aboveShare: number;
 };
 
 type AutoSession = {
@@ -113,6 +143,7 @@ const defaultPaymentAvailability: PaymentAvailability = {
   currency: "KES",
   deposit: { mpesa: true, paystack: true, card: true, trc20: true },
   withdraw: { mpesa: true, trc20: true },
+  cryptoNetworks: [],
 };
 
 function clamp(value: number, min: number, max: number) {
@@ -353,6 +384,7 @@ export function TradeApp() {
   const [status, setStatus] = useState("connecting");
   const [walletOpen, setWalletOpen] = useState(false);
   const [walletSection, setWalletSection] = useState<"history" | "deposit" | "withdraw" | "referrals">("deposit");
+  const [mobilePanel, setMobilePanel] = useState<"trade" | "positions" | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
   const [aiOpen, setAiOpen] = useState(false);
   const [aiAppliedConfig, setAiAppliedConfig] = useState<AiRecommendation | null>(null);
@@ -495,6 +527,11 @@ export function TradeApp() {
     location.href = `/login?redirect=${encodeURIComponent("/trade")}&account=real`;
   }, []);
 
+  const requireRealLogin = useCallback(() => {
+    localStorage.removeItem("token");
+    redirectToTradeLogin();
+  }, [redirectToTradeLogin]);
+
   const openDepositPrompt = useCallback((reason?: string) => {
     setWalletSection("deposit");
     setWalletOpen(true);
@@ -542,6 +579,13 @@ export function TradeApp() {
     setPositions((items) => [position, ...items.filter((item) => item.id !== position.id)].slice(0, 60));
   }, [playPositionSound, showTradeOutcome]);
 
+  const openMobilePositionsPanel = useCallback(() => {
+    if (typeof window !== "undefined" && window.innerWidth < 900) {
+      setActivityTab("open");
+      setMobilePanel("positions");
+    }
+  }, []);
+
   const postTradeAction = useCallback(async (type: string, config: Record<string, unknown> = {}) => {
     if (!token) return;
     const response = await fetch("/api/trade/action", {
@@ -573,12 +617,13 @@ export function TradeApp() {
       setAutoControlDirection((current) => data.session?.active ? pendingAction?.mode === "auto-start" ? pendingAction.direction : current ?? data.session.direction ?? null : null);
       setMessage(data.session?.active ? "Auto-trading is running" : "Auto-trading stopped");
     }
+    if (type === "manual_trade" || type === "auto_trading_start") openMobilePositionsPanel();
     if (type === "manual_trade" || type === "auto_trading_start" || type === "auto_trading_stop") {
       if (!data.position) suppressNextEntrySoundRef.current = false;
       setPendingTradeAction(null);
     }
     await load(token).catch(() => undefined);
-  }, [applyPositionUpdate, load, openDepositPrompt, redirectToTradeLogin, setPendingTradeAction, token]);
+  }, [applyPositionUpdate, load, openDepositPrompt, openMobilePositionsPanel, redirectToTradeLogin, setPendingTradeAction, token]);
 
   useEffect(() => {
     const saved = localStorage.getItem("token");
@@ -602,13 +647,8 @@ export function TradeApp() {
       switchAccount(true).catch(() => undefined);
       return;
     }
-    if (requestedAccount !== "real" || !user.is_demo) return;
-    switchAccount(false).finally(() => {
-      params.delete("account");
-      const query = params.toString();
-      history.replaceState(null, "", query ? `/trade?${query}` : "/trade");
-    });
-  }, [token, user]);
+    if (requestedAccount === "real" && user.is_demo) requireRealLogin();
+  }, [requireRealLogin, token, user]);
 
   useEffect(() => {
     if (!token) return;
@@ -636,8 +676,10 @@ export function TradeApp() {
         if (payload.type === "price_update") setTick(payload.data);
         if (payload.type === "balance_update") setUser(payload.data);
         if (payload.type === "position_update") {
+          const pendingAction = pendingTradeActionRef.current;
           applyPositionUpdate(payload.data);
-          if (pendingTradeActionRef.current?.mode === "manual") setPendingTradeAction(null);
+          if (pendingAction?.mode === "manual" || pendingAction?.mode === "auto-start") openMobilePositionsPanel();
+          if (pendingAction?.mode === "manual") setPendingTradeAction(null);
           if (token) load(token).catch(() => undefined);
         }
         if (payload.type === "auth_success" && payload.data?.user) {
@@ -653,6 +695,7 @@ export function TradeApp() {
           setAutoSession(session ?? null);
           const pendingAction = pendingTradeActionRef.current;
           setAutoControlDirection((current) => session?.active ? pendingAction?.mode === "auto-start" ? pendingAction.direction : current ?? session.direction ?? null : null);
+          if (pendingAction?.mode === "auto-start") openMobilePositionsPanel();
           if (pendingAction?.mode !== "manual") setPendingTradeAction(null);
           if (session?.active) setMessage("Auto-trading is running");
           else if (session?.stopReason) setMessage(`Auto-trading stopped: ${String(session.stopReason).replaceAll("_", " ")}`);
@@ -676,7 +719,7 @@ export function TradeApp() {
       if (retry) clearTimeout(retry);
       wsRef.current?.close();
     };
-  }, [applyPositionUpdate, asset, load, openDepositPrompt, redirectToTradeLogin, setPendingTradeAction, token]);
+  }, [applyPositionUpdate, asset, load, openDepositPrompt, openMobilePositionsPanel, redirectToTradeLogin, setPendingTradeAction, token]);
 
   useEffect(() => {
     if (!token) return;
@@ -734,6 +777,10 @@ export function TradeApp() {
   async function switchAccount(isDemo: boolean) {
     if (!token) {
       if (!isDemo) redirectToTradeLogin();
+      return;
+    }
+    if (!isDemo && user?.is_demo) {
+      requireRealLogin();
       return;
     }
     const response = await fetch("/api/auth/switch-account", {
@@ -1110,6 +1157,23 @@ export function TradeApp() {
   const marketToggleTarget: TradeWorkspace = isForexMode ? "Spot" : "Forex";
   const marketToggleLabel = isForexMode ? "Index Trade" : "Forex";
   const showDigitSelector = !isForexMode && contractGroup !== "evenOdd";
+  const contractGroupLabel = isForexMode ? "Forex" : contractGroup === "evenOdd" ? "Even/Odd" : contractGroup === "matchDiffer" ? "Match/Differ" : "Over/Under";
+  const showAutoSessionCard = mode === "auto";
+  const manualClosedProfitLoss = completedPositions.reduce((sum, position) => sum + Number(position.profit_loss ?? 0), 0);
+  const manualTradeCount = positions.length;
+  const manualClosedCount = completedPositions.length;
+  const sessionCardProfitLoss = showAutoSessionCard ? sessionProfitLoss : manualClosedProfitLoss;
+  const sessionModeLabel = showAutoSessionCard ? isAutoRunning ? "Auto running" : "Auto ready" : `${user?.is_demo ? "Demo" : "Real"} manual`;
+  const sessionMaxTrades = Number(autoSession?.maxTrades ?? maxTrades) || maxTrades;
+  const sessionTradesLabel = showAutoSessionCard ? `${sessionTradesCount}/${sessionMaxTrades}` : `${manualTradeCount} total`;
+  const sessionTargetProfit = Number(autoSession?.targetProfit ?? targetProfit);
+  const sessionTargetLoss = Number(autoSession?.targetLoss ?? targetLoss);
+  const sessionDetailLabel = showAutoSessionCard ? "Target" : "Closed";
+  const sessionDetailValue = showAutoSessionCard ? `P ${moneyLabel(sessionTargetProfit)} / L ${moneyLabel(sessionTargetLoss)}` : String(manualClosedCount);
+  const tradeModeSummary = `${mode === "auto" ? "Auto" : "Manual"} - ${contractGroupLabel}`;
+  const positionsSummary = `${openPositions.length} open - ${completedPositions.length} closed`;
+  const compactBalanceLabel = `$${Number(user?.active_balance ?? 0).toLocaleString(undefined, { notation: "compact", maximumFractionDigits: 1 })}`;
+  const isAutoStoppedMessage = message.toLowerCase().startsWith("auto-trading stopped");
   const pricePrecision = isForexAsset(asset) ? asset.includes("jpy") ? 3 : 5 : 2;
   const formatActivePrice = (value: number | undefined) => typeof value === "number" ? value.toFixed(pricePrecision) : "-";
   const tradeButtonLabel = (label: string, direction: Direction) => {
@@ -1132,28 +1196,30 @@ export function TradeApp() {
   }
 
   return (
-    <main className="trade-theme min-h-screen overflow-x-hidden bg-[#0b0f16] text-white min-[600px]:flex min-[600px]:h-screen min-[600px]:flex-col min-[600px]:overflow-hidden" data-theme={themeMode}>
-      <header className="sticky top-0 z-30 border-b border-white/10 bg-[#0b0f16]/95 backdrop-blur min-[600px]:shrink-0">
-        <div className="mx-auto flex max-w-[1500px] items-center justify-between gap-2 px-3 py-2 sm:px-4">
-          <div className="flex min-w-0 items-center gap-2">
-            <Logo size="sm" />
-            <span aria-label={status} title={status} className={`h-2.5 w-2.5 shrink-0 rounded-full ${status === "connected" ? "bg-emerald-400" : "bg-amber-300"}`} />
+    <main className="trade-theme min-h-screen overflow-x-hidden bg-[#0b0f16] text-white min-[900px]:flex min-[900px]:h-screen min-[900px]:flex-col min-[900px]:overflow-hidden" data-theme={themeMode}>
+      <header className="sticky top-0 z-30 border-b border-white/10 bg-[#0b0f16]/95 backdrop-blur min-[900px]:shrink-0">
+        <div className="mx-auto flex max-w-[1500px] items-center justify-between gap-1 px-2 py-1.5 sm:gap-2 sm:px-4 sm:py-2">
+          <div className="relative min-w-0">
+            <Logo size="sm" hideLabelOnMobile />
+            <span aria-label={status} title={status} className={`absolute left-[25px] top-[-3px] h-2.5 w-2.5 rounded-full ring-2 ring-[#0b0f16] ${status === "connected" ? "bg-emerald-400" : "bg-amber-300"}`} />
           </div>
-          <div className="flex min-w-0 items-center justify-end gap-1.5 overflow-x-auto pb-1 min-[600px]:overflow-hidden sm:pb-0">
-            <div className="flex shrink-0 rounded-lg bg-white/5 p-1">
-              <button onClick={() => switchAccount(true)} className={`rounded-md px-3 py-1.5 text-xs font-bold ${user.is_demo ? "bg-brand" : "text-gray-300 hover:bg-white/5"}`}>Demo</button>
-              <button onClick={() => switchAccount(false)} className={`rounded-md px-3 py-1.5 text-xs font-bold ${!user.is_demo ? "bg-brand" : "text-gray-300 hover:bg-white/5"}`}>Real</button>
+          <div className="flex min-w-0 flex-1 items-center justify-end gap-1 overflow-x-auto pb-1 min-[900px]:flex-none min-[900px]:gap-1.5 min-[900px]:overflow-hidden min-[900px]:pb-0">
+            <div className="hidden shrink-0 rounded-lg bg-white/5 p-1 min-[900px]:flex">
+              <button onClick={() => switchAccount(true)} className={`min-h-9 rounded-md px-3 py-1.5 text-xs font-bold ${user.is_demo ? "bg-brand" : "text-gray-300 hover:bg-white/5"}`}>Demo</button>
+              <button onClick={() => switchAccount(false)} className={`min-h-9 rounded-md px-3 py-1.5 text-xs font-bold ${!user.is_demo ? "bg-brand" : "text-gray-300 hover:bg-white/5"}`}>Real</button>
             </div>
-            <button onClick={() => setAiOpen(true)} className="inline-flex h-10 shrink-0 items-center gap-1.5 rounded-lg border border-brand/25 bg-brand/10 px-3 text-xs font-black text-brand hover:bg-brand/15"><Bot size={15} /><span>AI</span></button>
-            <button onClick={() => selectWorkspace("P2P")} className="inline-flex h-10 shrink-0 items-center gap-1.5 rounded-lg bg-white/5 px-3 text-xs font-bold text-gray-200 hover:bg-white/10"><ArrowLeftRight size={15} /><span>P2P</span></button>
+            <button aria-label="Open AI setup" title="AI setup" onClick={() => setAiOpen(true)} className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-brand/25 bg-brand/10 text-xs font-black text-brand hover:bg-brand/15 min-[900px]:h-10 min-[900px]:w-auto min-[900px]:gap-1.5 min-[900px]:px-3"><Bot size={15} /><span className="hidden min-[900px]:inline">AI</span></button>
+            <button onClick={() => selectWorkspace("P2P")} className="inline-flex h-9 shrink-0 items-center gap-1 rounded-lg bg-white/5 px-2 text-xs font-bold text-gray-200 hover:bg-white/10 min-[900px]:h-10 min-[900px]:gap-1.5 min-[900px]:px-3"><ArrowLeftRight size={15} /><span>P2P</span></button>
             <button
+              aria-label={marketToggleLabel}
+              title={marketToggleLabel}
               onClick={() => selectWorkspace(marketToggleTarget)}
-              className={`inline-flex h-10 shrink-0 items-center gap-1.5 rounded-lg px-3 text-xs font-bold ${isForexMode ? "bg-brand text-ink" : "bg-white/5 text-gray-200 hover:bg-white/10"}`}
+              className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-xs font-bold min-[900px]:h-10 min-[900px]:w-auto min-[900px]:gap-1.5 min-[900px]:px-3 ${isForexMode ? "bg-brand text-ink" : "bg-white/5 text-gray-200 hover:bg-white/10"}`}
             >
               {isForexMode ? <Grid3X3 size={15} /> : <TrendingUp size={15} />}
-              <span>{marketToggleLabel}</span>
+              <span className="hidden min-[900px]:inline">{marketToggleLabel}</span>
             </button>
-            <button aria-label="Open wallet" onClick={() => { setWalletSection("deposit"); setWalletOpen(true); }} className="inline-flex h-10 min-w-[112px] shrink-0 items-center justify-center gap-1.5 rounded-lg bg-white/5 px-3 text-xs font-bold hover:bg-white/10"><Wallet size={15} /><span>${Number(user.active_balance).toFixed(2)}</span></button>
+            <button aria-label="Open wallet" onClick={() => { setWalletSection("deposit"); setWalletOpen(true); }} className="inline-flex h-9 min-w-[64px] shrink-0 items-center justify-center gap-1 rounded-lg bg-white/5 px-2 text-xs font-bold hover:bg-white/10 min-[900px]:h-10 min-[900px]:min-w-[112px] min-[900px]:gap-1.5 min-[900px]:px-3"><Wallet size={15} /><span className="min-[900px]:hidden">{compactBalanceLabel}</span><span className="hidden min-[900px]:inline">${Number(user.active_balance).toFixed(2)}</span></button>
             <button
               aria-label={`Switch to ${themeMode === "light" ? "dark" : "light"} theme`}
               title={`Switch to ${themeMode === "light" ? "dark" : "light"} theme`}
@@ -1162,7 +1228,7 @@ export function TradeApp() {
                 window.dispatchEvent(new CustomEvent<ThemeMode>("trade-theme-change", { detail: nextTheme }));
                 return nextTheme;
               })}
-              className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-white/5 text-gray-300 hover:bg-white/10"
+              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white/5 text-gray-300 hover:bg-white/10 min-[900px]:h-10 min-[900px]:w-10"
             >
               {themeMode === "light" ? <Moon size={17} /> : <Sun size={17} />}
             </button>
@@ -1170,26 +1236,26 @@ export function TradeApp() {
               aria-label={audioEnabled ? "Turn trade audio off" : "Turn trade audio on"}
               title={audioEnabled ? "Trade audio on" : "Trade audio off"}
               onClick={toggleTradeAudio}
-              className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-white/5 hover:bg-white/10 ${audioEnabled ? "text-brand" : "text-gray-400"}`}
+              className={`hidden h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-white/5 hover:bg-white/10 min-[900px]:inline-flex ${audioEnabled ? "text-brand" : "text-gray-400"}`}
             >
               {audioEnabled ? <Volume2 size={17} /> : <VolumeX size={17} />}
             </button>
-            <button aria-label="Log out" onClick={() => { localStorage.removeItem("token"); location.href = "/login"; }} className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg hover:bg-white/5"><LogOut size={17} /></button>
+            <button aria-label="Log out" onClick={() => { localStorage.removeItem("token"); location.href = "/login"; }} className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg hover:bg-white/5 min-[900px]:h-10 min-[900px]:w-10"><LogOut size={17} /></button>
           </div>
         </div>
       </header>
 
-      <div className="mx-auto grid w-full max-w-[1500px] grid-cols-1 gap-3 p-2 sm:p-3 min-[600px]:min-h-0 min-[600px]:flex-1 min-[600px]:grid-cols-[128px_minmax(0,1fr)_300px] min-[600px]:items-stretch min-[600px]:gap-1 min-[600px]:overflow-hidden min-[900px]:grid-cols-[220px_minmax(0,1fr)_360px] min-[900px]:p-2 xl:grid-cols-[260px_minmax(0,1fr)_420px] xl:items-stretch 2xl:grid-cols-[300px_minmax(0,1fr)_440px]">
-        <section className="order-1 min-w-0 space-y-3 min-[600px]:order-2 min-[600px]:flex min-[600px]:h-full min-[600px]:flex-col min-[600px]:gap-2 min-[600px]:space-y-0 min-[600px]:overflow-hidden xl:col-start-2 xl:row-start-1">
-          <div className="overflow-hidden rounded-lg border border-white/10 bg-[#0f141d] min-[600px]:flex min-[600px]:min-h-0 min-[600px]:flex-1 min-[600px]:flex-col">
-            <div className="border-b border-white/10 p-3 min-[600px]:p-2 sm:p-4">
-              <div className="grid gap-3 min-[900px]:grid-cols-[minmax(0,1fr)_minmax(190px,240px)] min-[900px]:items-start">
+      <div className="mx-auto grid w-full max-w-[1500px] grid-cols-1 gap-2 p-2 sm:gap-3 sm:p-3 min-[900px]:min-h-0 min-[900px]:flex-1 min-[900px]:grid-cols-[180px_minmax(0,1fr)_330px] min-[900px]:items-stretch min-[900px]:gap-1 min-[900px]:overflow-hidden min-[900px]:p-2 xl:grid-cols-[260px_minmax(0,1fr)_420px] xl:items-stretch 2xl:grid-cols-[300px_minmax(0,1fr)_440px]">
+        <section className="order-1 min-w-0 space-y-2 min-[900px]:order-2 min-[900px]:flex min-[900px]:h-full min-[900px]:flex-col min-[900px]:gap-2 min-[900px]:space-y-0 min-[900px]:overflow-hidden xl:col-start-2 xl:row-start-1">
+          <div className="overflow-hidden rounded-lg border border-white/10 bg-[#0f141d] min-[900px]:flex min-[900px]:min-h-0 min-[900px]:flex-1 min-[900px]:flex-col">
+            <div className="border-b border-white/10 p-2 min-[600px]:p-2 sm:p-4">
+              <div className="grid gap-2 min-[600px]:gap-3 min-[900px]:grid-cols-[minmax(0,1fr)_minmax(190px,240px)] min-[900px]:items-start">
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
-                    <h1 className="min-w-0 text-xl font-black sm:text-2xl">{assetLabel(asset)}</h1>
+                    <h1 className="min-w-0 text-base font-black min-[600px]:text-xl sm:text-2xl">{assetLabel(asset)}</h1>
                     <span className="rounded-md bg-brand/15 px-2 py-1 text-xs font-bold text-brand">{isForexMode ? "Forex" : mode === "auto" ? "Bot" : "Spot"}</span>
                   </div>
-                  <div className="mt-2 flex flex-wrap items-center gap-3 text-sm text-gray-400">
+                  <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-gray-400 min-[600px]:mt-2 min-[600px]:gap-3 min-[600px]:text-sm">
                     <span>Price <span className="font-black text-white">{formatActivePrice(tick?.price)}</span></span>
                     {!isForexMode && <span>Digit <span className="font-black text-brand">{tick?.lastDigit ?? "-"}</span></span>}
                     <span className={movement >= 0 ? "text-emerald-400" : "text-rose-400"}>{movement >= 0 ? "+" : ""}{movement.toFixed(2)}</span>
@@ -1197,19 +1263,18 @@ export function TradeApp() {
                   </div>
                 </div>
                 <label className="relative block min-w-0">
-                  <span className="pointer-events-none absolute left-3 top-1.5 z-[1] text-[9px] font-black uppercase tracking-wide text-gray-500">{isForexMode ? "Currency" : "Volatility"}</span>
-                  <select value={asset} onChange={(event) => switchAsset(event.target.value)} className="field h-12 min-w-0 pb-1.5 pt-5 text-sm font-black">
+                  <select value={asset} onChange={(event) => switchAsset(event.target.value)} className="field h-10 min-w-0 py-2 text-xs font-black min-[600px]:h-12 min-[600px]:py-3 min-[600px]:text-sm">
                     {selectableAssets.map((item) => <option key={item} value={item}>{assetLabel(item)}</option>)}
                   </select>
                 </label>
               </div>
-              <div className="mt-3 flex max-w-full gap-1 overflow-x-auto rounded-lg bg-white/5 p-1 min-[600px]:overflow-hidden">
+              <div className="mt-2 flex max-w-full gap-1 overflow-x-auto rounded-lg bg-white/5 p-1 min-[600px]:mt-3 min-[600px]:overflow-hidden">
                   {chartTimeframes.map((timeframe) => (
                     <button
                       key={timeframe}
                       aria-pressed={activeTimeframe === timeframe}
                       onClick={() => selectTimeframe(timeframe)}
-                      className={`rounded-md px-3 py-1.5 text-xs font-bold min-[600px]:flex-1 min-[600px]:px-1.5 min-[600px]:text-[11px] ${activeTimeframe === timeframe ? "bg-brand !text-ink" : "text-gray-300 hover:bg-white/5"}`}
+                      className={`min-h-9 min-w-10 rounded-md px-2 py-1 text-[11px] font-bold min-[600px]:flex-1 min-[600px]:px-1.5 min-[600px]:py-1.5 ${activeTimeframe === timeframe ? "bg-brand !text-ink" : "text-gray-300 hover:bg-white/5"}`}
                     >
                       {timeframe}
                     </button>
@@ -1217,7 +1282,7 @@ export function TradeApp() {
               </div>
             </div>
 
-            <div className="relative min-h-[300px] bg-[#0a0e14] min-[600px]:min-h-0 min-[600px]:flex-1 sm:min-h-[430px] lg:min-h-[470px]">
+            <div className="relative h-[200px] min-h-[190px] bg-[#0a0e14] sm:h-[260px] min-[900px]:h-auto min-[900px]:min-h-0 min-[900px]:flex-1 xl:min-h-[420px]">
               <svg viewBox="0 0 640 300" preserveAspectRatio="none" className="absolute inset-0 h-full w-full">
                 <defs>
                   <linearGradient id="trade-chart" x1="0" x2="0" y1="0" y2="1"><stop stopColor="#FACC15" stopOpacity=".26" /><stop offset="1" stopColor="#FACC15" stopOpacity="0" /></linearGradient>
@@ -1242,7 +1307,7 @@ export function TradeApp() {
                 {chartPath && <circle cx={lastChartPoint.x} cy={lastChartPoint.y} r="4" fill="#FACC15" stroke="#0a0e14" strokeWidth="2" />}
                 {!chartPath && <text x="320" y="150" textAnchor="middle" fill="rgba(255,255,255,.45)" fontSize="15">Waiting for market data</text>}
               </svg>
-              <div className="absolute left-3 top-3 rounded-lg border border-white/10 bg-black/30 p-2.5 text-sm backdrop-blur sm:p-3">
+              <div className="absolute left-2 top-2 max-w-[min(70vw,12rem)] rounded-lg border border-white/10 bg-black/30 p-2 text-xs backdrop-blur sm:left-3 sm:top-3 sm:p-3 sm:text-sm">
                 <div className="max-w-48 truncate text-xs text-gray-400">{assetLabel(asset)} · {activeTimeframe} · {durationTicks}s</div>
                 <div className="mt-1 text-xl font-black sm:text-2xl">{formatActivePrice(tick?.price)}</div>
               </div>
@@ -1254,57 +1319,14 @@ export function TradeApp() {
             </div>
           </div>
           {!isForexMode && (
-            <div className="rounded-lg border border-white/10 bg-[#0f141d] p-3 min-[600px]:shrink-0 min-[600px]:p-2 sm:p-4">
-              <div className="mb-3 flex items-center justify-between gap-3 min-[600px]:mb-2">
-                <h2 className="font-black">Digits</h2>
-                <span className="text-xs font-semibold text-gray-500">D{selectedDigit}</span>
-              </div>
-              <div className="mb-3 grid grid-cols-3 gap-1.5 text-center text-[10px] min-[600px]:mb-2 min-[600px]:grid-cols-6">
-                {[
-                  ["Now", tick?.lastDigit !== undefined ? `D${tick.lastDigit}` : "-"],
-                  ["Hot", `D${digitMeasures.hot.digit} ${digitMeasures.hot.percentage.toFixed(0)}%`],
-                  ["Cold", `D${digitMeasures.cold.digit} ${digitMeasures.cold.percentage.toFixed(0)}%`],
-                  ["Even", `${digitMeasures.evenShare.toFixed(0)}%`],
-                  ["Odd", `${digitMeasures.oddShare.toFixed(0)}%`],
-                  [`>${selectedDigit}`, `${digitMeasures.aboveShare.toFixed(0)}%`],
-                ].map(([label, value]) => (
-                  <div key={label} className="rounded-full border border-white/10 bg-white/5 px-2 py-1.5">
-                    <div className="truncate font-black text-gray-500">{label}</div>
-                    <div className="truncate text-xs font-black text-white">{value}</div>
-                  </div>
-                ))}
-              </div>
-              <div className="grid grid-cols-5 gap-1.5 sm:gap-2 min-[600px]:grid-cols-10 min-[600px]:gap-1">
-                {digitStats.map(({ digit, count, percentage }) => {
-                  const isCurrentDigit = tick?.lastDigit === digit;
-                  const isHotDigit = digitMeasures.hot.digit === digit && digitMeasures.total > 0;
-                  const isColdDigit = digitMeasures.cold.digit === digit && digitMeasures.total > 0;
-                  return (
-                    <div
-                      key={digit}
-                      aria-label={`Digit ${digit}: ${percentage.toFixed(1)} percent, ${count} samples`}
-                      className={`relative grid aspect-square min-h-14 place-items-center overflow-hidden rounded-full border p-1 text-center min-[600px]:min-h-11 ${isCurrentDigit ? "border-brand bg-brand/20 ring-2 ring-brand" : isHotDigit ? "border-emerald-400/50 bg-emerald-400/10" : isColdDigit ? "border-rose-400/50 bg-rose-400/10" : "border-white/10 bg-white/5"}`}
-                    >
-                      <span className="relative z-[1] block leading-none">
-                        <span className="block text-lg font-black min-[600px]:text-base">{digit}</span>
-                        <span className="mt-0.5 block text-[10px] font-bold text-gray-400">{count ? `${percentage.toFixed(0)}%` : "-"}</span>
-                        <span className="block text-[9px] font-bold text-gray-500">{count}</span>
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-              <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[10px] font-semibold text-gray-500">
-                <span>n {digitMeasures.total}</span>
-                <span>&lt;{selectedDigit}: {digitMeasures.belowShare.toFixed(0)}%</span>
-                <span>D{selectedDigit}</span>
-              </div>
+            <div>
+              <DigitPanel tick={tick} selectedDigit={selectedDigit} digitStats={digitStats} digitMeasures={digitMeasures} />
             </div>
           )}
         </section>
 
-        <aside className="order-2 min-w-0 space-y-3 min-[600px]:order-1 min-[600px]:flex min-[600px]:h-full min-[600px]:flex-col min-[600px]:space-y-2 min-[600px]:self-stretch min-[600px]:overflow-hidden xl:col-start-1 xl:row-start-1">
-          <div className="hidden min-h-0 min-[600px]:block min-[600px]:flex-1 xl:block">
+        <aside className="hidden min-w-0 min-[900px]:order-1 min-[900px]:flex min-[900px]:h-full min-[900px]:flex-col min-[900px]:space-y-2 min-[900px]:self-stretch min-[900px]:overflow-hidden xl:col-start-1 xl:row-start-1">
+          <div className="hidden min-h-0 min-[900px]:block min-[900px]:flex-1 xl:block">
             <ActivityPanel
               activeTab={activityTab}
               completedPositions={completedPositions}
@@ -1314,7 +1336,7 @@ export function TradeApp() {
             />
           </div>
           {lastTradeOutcome && <TradeOutcomeCard key={lastTradeOutcome.id} outcome={lastTradeOutcome} />}
-          <div className="hidden shrink-0 rounded-lg border border-white/10 bg-[#0f141d] p-3 min-[600px]:grid min-[600px]:gap-2">
+          <div className="hidden shrink-0 rounded-lg border border-white/10 bg-[#0f141d] p-3 min-[900px]:grid min-[900px]:gap-2">
             <div className="text-xs font-black uppercase tracking-wide text-gray-500">Session</div>
             <div className="grid grid-cols-2 gap-2">
               <div className="min-w-0 rounded-lg bg-white/5 p-2">
@@ -1329,9 +1351,9 @@ export function TradeApp() {
           </div>
         </aside>
 
-        <aside className="order-3 min-w-0 min-[600px]:flex min-[600px]:h-full min-[600px]:self-stretch min-[600px]:overflow-hidden xl:col-start-3 xl:row-start-1">
-          <div className="flex min-h-0 w-full flex-col rounded-lg border border-white/10 bg-[#0f141d] text-white shadow-xl shadow-black/20 min-[600px]:h-full">
-            <div className="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] items-center gap-1.5 border-b border-white/10 p-1.5 min-[900px]:p-2">
+        <aside className="order-2 min-w-0 space-y-2 min-[900px]:order-3 min-[900px]:flex min-[900px]:h-full min-[900px]:space-y-0 min-[900px]:self-stretch min-[900px]:overflow-hidden xl:col-start-3 xl:row-start-1">
+          <div className="flex min-h-0 w-full flex-col rounded-lg border border-white/10 bg-[#0f141d] text-white shadow-xl shadow-black/20 min-[900px]:h-full">
+            <div className="hidden grid-cols-[minmax(0,1fr)_auto_auto_auto] items-center gap-1.5 border-b border-white/10 p-1 min-[900px]:grid min-[900px]:p-2">
               <button onClick={() => switchAccount(false)} className="flex min-w-0 items-center gap-1.5 rounded-xl border border-white/10 bg-white/5 p-1 text-left shadow-sm">
                 <span className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-brand text-sm font-black text-ink">{user.is_demo ? "D" : "R"}</span>
                 <span className="min-w-0">
@@ -1344,8 +1366,8 @@ export function TradeApp() {
               <button aria-label="Open profile" onClick={() => { location.href = "/settings"; }} className="grid h-9 w-9 place-items-center rounded-full border border-white/10 bg-white/5 text-gray-300 hover:bg-white/10"><CircleUserRound size={19} /></button>
             </div>
 
-            <div className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-hidden p-1.5 min-[900px]:p-2">
-              <div>
+            <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-visible p-1.5 sm:p-2 min-[900px]:overflow-hidden min-[900px]:p-2">
+              <div className="hidden min-[900px]:block">
                 <div className="mb-1 flex items-center justify-between gap-3">
                   <h2 className="text-xs font-black uppercase tracking-wide text-gray-400">Mode</h2>
                   <div className="flex items-center gap-2">
@@ -1357,8 +1379,8 @@ export function TradeApp() {
                   </div>
                 </div>
                 <div className="grid grid-cols-2 overflow-hidden rounded-xl border border-white/10 bg-white/5 p-0.5">
-                  <button onClick={() => selectTradeMode("auto")} className={`rounded-lg px-3 py-1.5 text-xs font-black uppercase tracking-wide ${mode === "auto" ? "bg-brand text-ink shadow-sm" : "text-gray-300 hover:bg-white/5"}`}>Auto</button>
-                  <button onClick={() => selectTradeMode("manual")} className={`rounded-lg px-3 py-1.5 text-xs font-black uppercase tracking-wide ${mode === "manual" ? "bg-brand text-ink shadow-sm" : "text-gray-300 hover:bg-white/5"}`}>Manual</button>
+                  <button onClick={() => selectTradeMode("auto")} className={`min-h-9 rounded-lg px-3 py-1 text-xs font-black uppercase tracking-wide min-[600px]:py-1.5 ${mode === "auto" ? "bg-brand text-ink shadow-sm" : "text-gray-300 hover:bg-white/5"}`}>Auto</button>
+                  <button onClick={() => selectTradeMode("manual")} className={`min-h-9 rounded-lg px-3 py-1 text-xs font-black uppercase tracking-wide min-[600px]:py-1.5 ${mode === "manual" ? "bg-brand text-ink shadow-sm" : "text-gray-300 hover:bg-white/5"}`}>Manual</button>
                 </div>
                 {aiAppliedConfig && !isForexAsset(aiAppliedConfig.asset) && (
                   <div className="mt-1.5 flex items-center justify-between gap-2 rounded-xl border border-brand/20 bg-brand/10 px-2 py-1 text-[11px]">
@@ -1369,34 +1391,127 @@ export function TradeApp() {
               </div>
 
               {!isForexMode && (
-                <div className="grid grid-cols-3 gap-1.5">
+                <div className="hidden grid-cols-3 gap-1.5 min-[900px]:grid">
                   {([
                     ["evenOdd", "Even / Odd"],
                     ["matchDiffer", "Match / Differ"],
                     ["overUnder", "Over / Under"],
                   ] as const).map(([id, label]) => (
-                    <button key={id} onClick={() => selectContractGroup(id)} className={`min-h-9 rounded-xl border px-1.5 text-[11px] font-black ${contractGroup === id ? "border-brand bg-brand text-ink shadow-sm" : "border-white/10 bg-white/5 text-gray-400 hover:bg-white/10 hover:text-white"}`}>{label}</button>
+                    <button key={id} onClick={() => selectContractGroup(id)} className={`min-h-8 rounded-xl border px-1.5 text-[11px] font-black min-[600px]:min-h-9 ${contractGroup === id ? "border-brand bg-brand text-ink shadow-sm" : "border-white/10 bg-white/5 text-gray-400 hover:bg-white/10 hover:text-white"}`}>{label}</button>
                   ))}
                 </div>
               )}
+
+              <div className="grid grid-cols-2 gap-1.5 min-[900px]:hidden">
+                <button
+                  type="button"
+                  onClick={() => setMobilePanel("trade")}
+                  className="min-h-11 min-w-0 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-left hover:bg-white/10"
+                >
+                  <span className="block text-[10px] font-black uppercase tracking-wide text-gray-500">Trade mode</span>
+                  <span className="mt-0.5 block truncate text-xs font-black text-white">{tradeModeSummary}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMobilePanel("positions")}
+                  className="min-h-11 min-w-0 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-left hover:bg-white/10"
+                >
+                  <span className="block text-[10px] font-black uppercase tracking-wide text-gray-500">Positions</span>
+                  <span className="mt-0.5 block truncate text-xs font-black text-white">{positionsSummary}</span>
+                </button>
+              </div>
+
+              <details className="hidden">
+                <summary className="flex cursor-pointer list-none items-center justify-between gap-2 text-xs font-black uppercase tracking-wide text-gray-300">
+                  <span className="truncate">Settings · {mode} · {isForexMode ? "Forex" : contractGroup === "evenOdd" ? "Even/Odd" : contractGroup === "matchDiffer" ? "Match/Differ" : "Over/Under"}</span>
+                  <ChevronDown size={14} className="shrink-0 text-gray-500" />
+                </summary>
+                <div className="mt-2 grid gap-2 rounded-xl border border-white/10 bg-[#0f141d] p-2 shadow-xl shadow-black/40">
+                  <div className="grid grid-cols-2 overflow-hidden rounded-lg border border-white/10 bg-black/15 p-0.5 text-xs font-black uppercase">
+                    <button onClick={() => selectTradeMode("auto")} className={`rounded-md px-3 py-1.5 ${mode === "auto" ? "bg-brand text-ink" : "text-gray-300"}`}>Auto</button>
+                    <button onClick={() => selectTradeMode("manual")} className={`rounded-md px-3 py-1.5 ${mode === "manual" ? "bg-brand text-ink" : "text-gray-300"}`}>Manual</button>
+                  </div>
+                  {!isForexMode && (
+                    <div className="grid grid-cols-3 gap-1">
+                      {([
+                        ["evenOdd", "Even / Odd"],
+                        ["matchDiffer", "Match"],
+                        ["overUnder", "Over"],
+                      ] as const).map(([id, label]) => (
+                        <button key={id} onClick={() => selectContractGroup(id)} className={`min-h-8 rounded-lg border px-1 text-[10px] font-black ${contractGroup === id ? "border-brand bg-brand text-ink" : "border-white/10 bg-white/5 text-gray-400"}`}>{label}</button>
+                      ))}
+                    </div>
+                  )}
+                  {!isForexMode && (
+                    <div className="grid grid-cols-2 overflow-hidden rounded-lg border border-white/10 bg-black/15 text-xs font-black">
+                      <button onClick={() => setAmountMode("stake")} className={`px-2.5 py-1.5 ${amountMode === "stake" ? "bg-brand text-ink" : "text-gray-400"}`}>Stake</button>
+                      <button onClick={() => setAmountMode("payout")} className={`px-2.5 py-1.5 ${amountMode === "payout" ? "bg-brand text-ink" : "text-gray-400"}`}>Payout</button>
+                    </div>
+                  )}
+                  {mode === "manual" && (
+                    <div className="grid grid-cols-6 gap-1">
+                      {quickStakeAmounts.map((amount) => (
+                        <button key={amount} type="button" onClick={() => { setAmountMode("stake"); setStake(amount); }} className={`min-h-7 rounded-lg border text-[11px] font-black ${stake === amount ? "border-brand bg-brand/15 text-brand" : "border-white/10 bg-white/5 text-gray-400"}`}>${amount}</button>
+                      ))}
+                    </div>
+                  )}
+                  {showDigitSelector && (
+                    <div className="rounded-lg border border-white/10 bg-black/15 p-1.5">
+                      <div className="mb-1 flex items-center justify-between text-[10px] font-black uppercase tracking-wide text-gray-500">
+                        <span>Digit</span>
+                        <span className="text-brand">D{selectedDigit}</span>
+                      </div>
+                      <div className="grid grid-cols-10 gap-1">
+                        {digitOptions.map((digit) => (
+                          <button
+                            key={digit}
+                            type="button"
+                            aria-pressed={selectedDigit === digit}
+                            onClick={() => setSelectedDigit(digit)}
+                            className={`grid aspect-square min-h-6 place-items-center rounded-full border text-[10px] font-black ${selectedDigit === digit ? "border-brand bg-brand text-ink" : "border-white/10 bg-white/5 text-gray-300"}`}
+                          >
+                            {digit}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {mode === "auto" && (
+                    <div className="grid grid-cols-3 gap-1">
+                      <label className="rounded-lg border border-white/10 bg-black/15 p-1">
+                        <span className="block text-[9px] font-black uppercase text-emerald-500">Profit</span>
+                        <input className="mt-1 w-full bg-transparent text-center text-sm font-black text-white outline-none" type="number" value={targetProfit} onChange={(e) => setTargetProfit(Number(e.target.value))} />
+                      </label>
+                      <label className="rounded-lg border border-white/10 bg-black/15 p-1">
+                        <span className="block text-[9px] font-black uppercase text-rose-500">Loss</span>
+                        <input className="mt-1 w-full bg-transparent text-center text-sm font-black text-white outline-none" type="number" value={targetLoss} onChange={(e) => setTargetLoss(Number(e.target.value))} />
+                      </label>
+                      <label className="rounded-lg border border-white/10 bg-black/15 p-1">
+                        <span className="block text-[9px] font-black uppercase text-amber-500">Trades</span>
+                        <input className="mt-1 w-full bg-transparent text-center text-sm font-black text-white outline-none" type="number" value={maxTrades} onChange={(e) => setMaxTrades(Number(e.target.value))} />
+                      </label>
+                    </div>
+                  )}
+                </div>
+              </details>
 
               <div>
                 <div className="mb-1 flex items-center justify-between gap-3">
                   <h3 className="text-xs font-black uppercase tracking-wide text-gray-400">{isForexMode ? "Margin" : "Stake"}</h3>
                   {!isForexMode && (
-                    <div className="grid grid-cols-2 overflow-hidden rounded-lg border border-white/10 bg-white/5 text-xs font-black">
-                      <button onClick={() => setAmountMode("stake")} className={`px-2.5 py-1 ${amountMode === "stake" ? "bg-brand text-ink" : "text-gray-400"}`}>Stake</button>
-                      <button onClick={() => setAmountMode("payout")} className={`px-2.5 py-1 ${amountMode === "payout" ? "bg-brand text-ink" : "text-gray-400"}`}>Payout</button>
+                    <div className="hidden grid-cols-2 overflow-hidden rounded-lg border border-white/10 bg-white/5 text-xs font-black min-[900px]:grid">
+                      <button onClick={() => setAmountMode("stake")} className={`min-h-9 px-2.5 py-1 ${amountMode === "stake" ? "bg-brand text-ink" : "text-gray-400"}`}>Stake</button>
+                      <button onClick={() => setAmountMode("payout")} className={`min-h-9 px-2.5 py-1 ${amountMode === "payout" ? "bg-brand text-ink" : "text-gray-400"}`}>Payout</button>
                     </div>
                   )}
                 </div>
 
-                <div className="grid grid-cols-[34px_1fr_34px] items-center rounded-2xl border border-white/10 bg-[#0b0f16] p-1 min-[900px]:grid-cols-[36px_1fr_36px]">
-                  <button aria-label="Decrease amount" onClick={() => adjustTicketAmount(-1)} className="grid h-8 place-items-center rounded-xl text-brand"><Minus size={21} /></button>
+                <div className="grid grid-cols-[40px_1fr_40px] items-center rounded-xl border border-white/10 bg-[#0b0f16] p-0.5 min-[600px]:rounded-2xl min-[600px]:p-1 min-[900px]:grid-cols-[36px_1fr_36px]">
+                  <button aria-label="Decrease amount" onClick={() => adjustTicketAmount(-1)} className="grid h-10 place-items-center rounded-xl text-brand min-[900px]:h-9"><Minus size={21} /></button>
                   <label className="flex items-center justify-center gap-2 text-center">
                     <span className="text-lg font-black text-brand">$</span>
                     <input
-                      className="w-20 bg-transparent text-center text-xl font-black leading-none text-white outline-none min-[900px]:w-24"
+                      className="h-10 w-20 bg-transparent text-center text-lg font-black leading-none text-white outline-none min-[600px]:text-xl min-[900px]:h-9 min-[900px]:w-24"
                       type="number"
                       min="0.1"
                       step="0.1"
@@ -1405,25 +1520,25 @@ export function TradeApp() {
                       aria-label={isForexMode ? "Margin amount" : amountMode === "stake" ? "Stake amount" : "Payout amount"}
                     />
                   </label>
-                  <button aria-label="Increase amount" onClick={() => adjustTicketAmount(1)} className="grid h-8 place-items-center rounded-xl text-brand"><Plus size={21} /></button>
+                  <button aria-label="Increase amount" onClick={() => adjustTicketAmount(1)} className="grid h-10 place-items-center rounded-xl text-brand min-[900px]:h-9"><Plus size={21} /></button>
                 </div>
 
                 {mode === "manual" && (
                   <>
-                    <div className="mt-1.5 grid grid-cols-6 gap-1">
+                    <div className="mt-1.5 hidden grid-cols-6 gap-1 min-[900px]:grid">
                       {quickStakeAmounts.map((amount) => (
-                        <button key={amount} type="button" onClick={() => { setAmountMode("stake"); setStake(amount); }} className={`min-h-7 rounded-lg border text-[11px] font-black ${stake === amount ? "border-brand bg-brand/15 text-brand" : "border-white/10 bg-white/5 text-gray-400 hover:bg-white/10 hover:text-white"}`}>${amount}</button>
+                        <button key={amount} type="button" onClick={() => { setAmountMode("stake"); setStake(amount); }} className={`min-h-9 rounded-lg border text-[11px] font-black ${stake === amount ? "border-brand bg-brand/15 text-brand" : "border-white/10 bg-white/5 text-gray-400 hover:bg-white/10 hover:text-white"}`}>${amount}</button>
                       ))}
                     </div>
 
-                    <div className="mt-1.5 flex items-center justify-between rounded-xl border border-white/10 bg-white/5 px-3 py-1.5">
+                    <div className="mt-1.5 flex items-center justify-between rounded-xl border border-white/10 bg-white/5 px-3 py-1 min-[600px]:py-1.5">
                       <span className="text-xs font-black text-gray-400">{isForexMode ? "Return" : "Payout"}</span>
-                      <span className="text-lg font-black text-white">${primaryPayout.toFixed(2)} <span className="text-[10px] font-black text-gray-500">USD</span></span>
+                      <span className="text-base font-black text-white min-[600px]:text-lg">${primaryPayout.toFixed(2)} <span className="text-[10px] font-black text-gray-500">USD</span></span>
                     </div>
                   </>
                 )}
                 {showDigitSelector ? (
-                  <div className="mt-1.5 rounded-xl border border-white/10 bg-white/5 p-1.5">
+                  <div className="mt-1.5 hidden rounded-xl border border-white/10 bg-white/5 p-1.5 min-[900px]:block">
                     <div className="mb-1 flex items-center justify-between">
                       <span className="text-[10px] font-black uppercase tracking-wide text-gray-500">Digit</span>
                       <span className="text-[11px] font-black text-brand">D{selectedDigit}</span>
@@ -1446,7 +1561,7 @@ export function TradeApp() {
               </div>
 
               {mode === "auto" && (
-                <div className="grid grid-cols-3 gap-1.5">
+                <div className="hidden grid-cols-3 gap-1.5 min-[900px]:grid">
                   <label className="rounded-xl border border-white/10 bg-white/5 p-1.5">
                     <span className="mb-0.5 flex items-center gap-1 text-[10px] font-black uppercase tracking-wide text-emerald-500"><Target size={12} /> Profit</span>
                     <span className="flex items-center gap-1.5 rounded-lg bg-black/20 px-2 py-1">
@@ -1486,7 +1601,7 @@ export function TradeApp() {
                           key={action.direction}
                           disabled={isTradeButtonDisabled(action.direction)}
                           onClick={() => place(action.direction)}
-                          className={`min-h-12 rounded-2xl border p-2 text-left font-black text-white disabled:cursor-not-allowed disabled:opacity-50 ${isBuy ? "border-emerald-400/35 bg-emerald-400/10" : "border-rose-400/35 bg-rose-400/10"}`}
+                          className={`min-h-10 rounded-xl border p-1.5 text-left font-black text-white disabled:cursor-not-allowed disabled:opacity-50 min-[600px]:min-h-12 min-[600px]:rounded-2xl min-[600px]:p-2 ${isBuy ? "border-emerald-400/35 bg-emerald-400/10" : "border-rose-400/35 bg-rose-400/10"}`}
                         >
                           <span className="mb-1 flex items-center gap-2 text-sm">
                             <Icon className={isBuy ? "text-emerald-400" : "text-rose-400"} size={18} />
@@ -1500,7 +1615,7 @@ export function TradeApp() {
                   </div>
                 </div>
               ) : (
-                <div className="mt-auto grid gap-1.5 border-t border-white/10 pt-1.5">
+                <div className="mt-auto grid grid-cols-2 gap-1.5 border-t border-white/10 pt-1.5 min-[900px]:grid-cols-1">
                   {contractActions.map((action) => {
                     const Icon = action.icon;
                     const profitPercent = stake > 0 ? ((action.payout / stake - 1) * 100).toFixed(2) : "0.00";
@@ -1511,35 +1626,118 @@ export function TradeApp() {
                         key={action.direction}
                         disabled={isTradeButtonDisabled(action.direction, action.disabled)}
                         onClick={() => place(action.direction)}
-                        className={`grid min-h-11 grid-cols-[34px_1fr_auto] items-center gap-2 rounded-xl border p-1.5 text-left disabled:cursor-not-allowed disabled:opacity-50 ${isGreen ? "border-emerald-400/35 bg-emerald-400/10 text-emerald-400" : "border-rose-400/35 bg-rose-400/10 text-rose-400"}`}
+                        className={`grid min-h-14 grid-cols-[24px_1fr] items-center gap-1 rounded-xl border p-1.5 text-left disabled:cursor-not-allowed disabled:opacity-50 min-[600px]:min-h-11 min-[600px]:grid-cols-[34px_1fr_auto] min-[600px]:gap-2 min-[600px]:p-1.5 ${isGreen ? "border-emerald-400/35 bg-emerald-400/10 text-emerald-400" : "border-rose-400/35 bg-rose-400/10 text-rose-400"}`}
                       >
-                        <span className={`grid h-8 w-8 place-items-center rounded-lg ${isGreen ? "bg-emerald-400/15" : "bg-rose-400/15"}`}><Icon size={19} /></span>
-                        <span className="text-sm font-black text-white">{actionLabel}</span>
-                        <span className="text-right">
-                          <span className="block text-[11px] font-black text-gray-300">${action.payout.toFixed(2)} USD</span>
-                          <span className={`block text-xs font-black ${isGreen ? "text-emerald-500" : "text-rose-500"}`}>{profitPercent}%</span>
+                        <span className={`grid h-6 w-6 place-items-center rounded-lg min-[600px]:h-8 min-[600px]:w-8 ${isGreen ? "bg-emerald-400/15" : "bg-rose-400/15"}`}><Icon size={17} /></span>
+                        <span className="truncate text-xs font-black text-white min-[600px]:text-sm">{actionLabel}</span>
+                        <span className="col-span-2 flex items-center justify-between gap-2 text-right min-[600px]:col-auto min-[600px]:block">
+                          <span className="block text-[10px] font-black text-gray-300 min-[600px]:text-[11px]">${action.payout.toFixed(2)} USD</span>
+                          <span className={`block text-[11px] font-black min-[600px]:text-xs ${isGreen ? "text-emerald-500" : "text-rose-500"}`}>{profitPercent}%</span>
                         </span>
                       </button>
                     );
                   })}
                 </div>
               )}
-              {message && <div className="max-h-10 overflow-hidden rounded-xl border border-brand/20 bg-brand/10 p-2 text-xs font-semibold leading-tight text-gray-200">{message}</div>}
+              {message && <div className={`${isAutoStoppedMessage ? "hidden min-[900px]:block" : ""} max-h-10 overflow-hidden rounded-xl border border-brand/20 bg-brand/10 p-2 text-xs font-semibold leading-tight text-gray-200`}>{message}</div>}
             </div>
           </div>
         </aside>
 
-        <section className="order-4 min-w-0 min-[600px]:hidden">
-          <ActivityPanel
-            activeTab={activityTab}
-            completedPositions={completedPositions}
-            openPositions={openPositions}
-            transactions={transactions}
-            setActiveTab={setActivityTab}
-          />
-        </section>
       </div>
 
+      {mobilePanel === "trade" && (
+        <MobileSheet title="Trade mode" onClose={() => setMobilePanel(null)}>
+          <div className="grid gap-2">
+            <div className="grid grid-cols-2 overflow-hidden rounded-lg border border-white/10 bg-black/15 p-0.5 text-xs font-black uppercase">
+              <button onClick={() => selectTradeMode("auto")} className={`min-h-10 rounded-md px-3 py-2 ${mode === "auto" ? "bg-brand text-ink" : "text-gray-300"}`}>Auto</button>
+              <button onClick={() => selectTradeMode("manual")} className={`min-h-10 rounded-md px-3 py-2 ${mode === "manual" ? "bg-brand text-ink" : "text-gray-300"}`}>Manual</button>
+            </div>
+            {!isForexMode && (
+              <div className="grid grid-cols-3 gap-1">
+                {([
+                  ["evenOdd", "Even / Odd"],
+                  ["matchDiffer", "Match"],
+                  ["overUnder", "Over"],
+                ] as const).map(([id, label]) => (
+                  <button key={id} onClick={() => selectContractGroup(id)} className={`min-h-10 rounded-lg border px-1 text-[10px] font-black ${contractGroup === id ? "border-brand bg-brand text-ink" : "border-white/10 bg-white/5 text-gray-400"}`}>{label}</button>
+                ))}
+              </div>
+            )}
+            {!isForexMode && (
+              <div className="grid grid-cols-2 overflow-hidden rounded-lg border border-white/10 bg-black/15 text-xs font-black">
+                <button onClick={() => setAmountMode("stake")} className={`min-h-10 px-2.5 py-2 ${amountMode === "stake" ? "bg-brand text-ink" : "text-gray-400"}`}>Stake</button>
+                <button onClick={() => setAmountMode("payout")} className={`min-h-10 px-2.5 py-2 ${amountMode === "payout" ? "bg-brand text-ink" : "text-gray-400"}`}>Payout</button>
+              </div>
+            )}
+            {mode === "manual" && (
+              <div className="grid grid-cols-3 gap-1 sm:grid-cols-6">
+                {quickStakeAmounts.map((amount) => (
+                  <button key={amount} type="button" onClick={() => { setAmountMode("stake"); setStake(amount); }} className={`min-h-10 rounded-lg border text-[11px] font-black ${stake === amount ? "border-brand bg-brand/15 text-brand" : "border-white/10 bg-white/5 text-gray-400"}`}>${amount}</button>
+                ))}
+              </div>
+            )}
+            {showDigitSelector && (
+              <div className="rounded-lg border border-white/10 bg-black/15 p-1.5">
+                <div className="mb-1 flex items-center justify-between text-[10px] font-black uppercase tracking-wide text-gray-500">
+                  <span>Digit</span>
+                  <span className="text-brand">D{selectedDigit}</span>
+                </div>
+                <div className="grid grid-cols-10 gap-1">
+                  {digitOptions.map((digit) => (
+                    <button
+                      key={digit}
+                      type="button"
+                      aria-pressed={selectedDigit === digit}
+                      onClick={() => setSelectedDigit(digit)}
+                      className={`grid aspect-square min-h-7 place-items-center rounded-full border text-[10px] font-black ${selectedDigit === digit ? "border-brand bg-brand text-ink" : "border-white/10 bg-white/5 text-gray-300"}`}
+                    >
+                      {digit}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {mode === "auto" && (
+              <div className="grid grid-cols-3 gap-1">
+                <label className="rounded-lg border border-white/10 bg-black/15 p-1.5">
+                  <span className="block text-[9px] font-black uppercase text-emerald-500">Profit</span>
+                  <input className="mt-1 w-full bg-transparent text-center text-sm font-black text-white outline-none" type="number" value={targetProfit} onChange={(e) => setTargetProfit(Number(e.target.value))} />
+                </label>
+                <label className="rounded-lg border border-white/10 bg-black/15 p-1.5">
+                  <span className="block text-[9px] font-black uppercase text-rose-500">Loss</span>
+                  <input className="mt-1 w-full bg-transparent text-center text-sm font-black text-white outline-none" type="number" value={targetLoss} onChange={(e) => setTargetLoss(Number(e.target.value))} />
+                </label>
+                <label className="rounded-lg border border-white/10 bg-black/15 p-1.5">
+                  <span className="block text-[9px] font-black uppercase text-amber-500">Trades</span>
+                  <input className="mt-1 w-full bg-transparent text-center text-sm font-black text-white outline-none" type="number" value={maxTrades} onChange={(e) => setMaxTrades(Number(e.target.value))} />
+                </label>
+              </div>
+            )}
+          </div>
+        </MobileSheet>
+      )}
+      {mobilePanel === "positions" && (
+        <MobileSheet title="Positions" onClose={() => setMobilePanel(null)}>
+          <div className="grid gap-2">
+            <SessionCard
+              modeLabel={sessionModeLabel}
+              profitLoss={sessionCardProfitLoss}
+              tradesLabel={sessionTradesLabel}
+              openCount={openPositions.length}
+              detailLabel={sessionDetailLabel}
+              detailValue={sessionDetailValue}
+            />
+            <ActivityPanel
+              activeTab={activityTab}
+              completedPositions={completedPositions}
+              openPositions={openPositions}
+              transactions={transactions}
+              setActiveTab={setActivityTab}
+            />
+          </div>
+        </MobileSheet>
+      )}
       {walletOpen && <WalletDrawer initialSection={walletSection} token={token} user={user} transactions={transactions} referral={referral} onRefresh={() => token ? load(token, user.is_demo) : Promise.resolve()} onClose={() => { setWalletOpen(false); token && load(token, user.is_demo); }} />}
       {aiOpen && (
         <AiTradeScanner
@@ -1556,12 +1754,87 @@ export function TradeApp() {
   );
 }
 
+function MobileSheet({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+  return (
+    <div className="fixed inset-0 z-50 bg-black/60 p-3 backdrop-blur-sm min-[900px]:hidden" onClick={onClose}>
+      <div
+        className="mx-auto mt-14 flex max-h-[calc(100vh-4.5rem)] w-full max-w-md flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#0f141d] p-3 shadow-xl shadow-black/30"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="mb-3 flex shrink-0 items-center justify-between gap-3">
+          <h2 className="truncate text-sm font-black uppercase tracking-wide text-gray-300">{title}</h2>
+          <button onClick={onClose} className="min-h-9 shrink-0 rounded-lg bg-white/5 px-3 text-xs font-bold text-gray-300 hover:bg-white/10">Close</button>
+        </div>
+        <div className="min-h-0 overflow-auto">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function DigitPanel({ tick, selectedDigit, digitStats, digitMeasures }: { tick: Tick | null; selectedDigit: number; digitStats: DigitStat[]; digitMeasures: DigitMeasures }) {
+  return (
+    <div className="rounded-lg border border-white/10 bg-[#0f141d] p-2 min-[600px]:shrink-0 min-[600px]:p-2 sm:p-3 xl:p-4">
+      <div className="mb-2 flex items-center justify-between gap-3 min-[600px]:mb-2">
+        <h2 className="text-sm font-black min-[600px]:text-base">Digits</h2>
+        <span className="text-xs font-semibold text-gray-500">D{selectedDigit}</span>
+      </div>
+      <div className="mb-2 grid grid-cols-6 gap-1 text-center text-[9px] min-[600px]:grid-cols-6 min-[600px]:text-[10px]">
+        {[
+          ["Now", tick?.lastDigit !== undefined ? `D${tick.lastDigit}` : "-"],
+          ["Hot", `D${digitMeasures.hot.digit} ${digitMeasures.hot.percentage.toFixed(0)}%`],
+          ["Cold", `D${digitMeasures.cold.digit} ${digitMeasures.cold.percentage.toFixed(0)}%`],
+          ["Even", `${digitMeasures.evenShare.toFixed(0)}%`],
+          ["Odd", `${digitMeasures.oddShare.toFixed(0)}%`],
+          [`>${selectedDigit}`, `${digitMeasures.aboveShare.toFixed(0)}%`],
+        ].map(([label, value]) => (
+          <div key={label} className="min-w-0 rounded-full border border-white/10 bg-white/5 px-1 py-1 min-[600px]:px-2 min-[600px]:py-1.5">
+            <div className="truncate font-black text-gray-500">{label}</div>
+            <div className="truncate text-[10px] font-black text-white min-[600px]:text-xs">{value}</div>
+          </div>
+        ))}
+      </div>
+      <div className="grid grid-cols-10 gap-1">
+        {digitStats.map(({ digit, count, percentage }) => {
+          const isCurrentDigit = tick?.lastDigit === digit;
+          const isHotDigit = digitMeasures.hot.digit === digit && digitMeasures.total > 0;
+          const isColdDigit = digitMeasures.cold.digit === digit && digitMeasures.total > 0;
+          return (
+            <div
+              key={digit}
+              aria-label={`Digit ${digit}: ${percentage.toFixed(1)} percent, ${count} samples`}
+              className={`relative grid aspect-square min-h-8 place-items-center overflow-hidden rounded-full border p-0.5 text-center min-[600px]:min-h-11 min-[600px]:p-1 ${isCurrentDigit ? "border-brand bg-brand/20 ring-2 ring-brand" : isHotDigit ? "border-emerald-400/50 bg-emerald-400/10" : isColdDigit ? "border-rose-400/50 bg-rose-400/10" : "border-white/10 bg-white/5"}`}
+            >
+              <span className="relative z-[1] block leading-none">
+                <span className="block text-sm font-black min-[600px]:text-base">{digit}</span>
+                <span className="mt-0.5 block text-[8px] font-bold text-gray-400 min-[600px]:text-[10px]">{count ? `${percentage.toFixed(0)}%` : "-"}</span>
+                <span className="hidden text-[9px] font-bold text-gray-500 min-[600px]:block">{count}</span>
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2 text-[10px] font-semibold text-gray-500 min-[600px]:mt-2">
+        <span>n {digitMeasures.total}</span>
+        <span>&lt;{selectedDigit}: {digitMeasures.belowShare.toFixed(0)}%</span>
+        <span>D{selectedDigit}</span>
+      </div>
+    </div>
+  );
+}
+
 function AiTradeScanner({ activeAsset, balance, currentTick, selectedDigit, onApply, onClose }: { activeAsset: string; balance: number; currentTick: Tick | null; selectedDigit: number; onApply: (config: AiRecommendation) => void; onClose: () => void }) {
   const [scope, setScope] = useState<AiScanScope>(isForexAsset(activeAsset) ? "forex" : "volatility");
   const [risk, setRisk] = useState<AiRisk>("balanced");
   const [recommendation, setRecommendation] = useState<AiRecommendation | null>(null);
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState("");
+  const scanMarketLabel = scope === "forex" ? "Forex" : "Volatility";
+  const scanSignals = scope === "forex"
+    ? ["Price trend", "Momentum", "Pair movement", "Leverage risk"]
+    : ["Digit frequency", "Even/Odd balance", "Over/Under edge", "Index movement"];
+  const scanSummary = scope === "forex"
+    ? "Scanning forex pairs for price direction, momentum, and risk-adjusted auto setups."
+    : "Scanning volatility indices for digit distribution, contract edge, and recent index movement.";
 
   async function loadTick(candidateAsset: string) {
     if (candidateAsset === activeAsset && currentTick?.asset === candidateAsset) return currentTick;
@@ -1652,8 +1925,26 @@ function AiTradeScanner({ activeAsset, balance, currentTick, selectedDigit, onAp
           />
         </div>
 
+        <div className={`mt-3 rounded-xl border p-3 ${scanning ? "border-brand/30 bg-brand/10" : "border-white/10 bg-white/5"}`}>
+          <div className="flex items-center gap-2">
+            {scanning ? <Loader2 size={15} className="shrink-0 animate-spin text-brand" /> : <Bot size={15} className="shrink-0 text-brand" />}
+            <div className="min-w-0">
+              <div className="truncate text-xs font-black uppercase tracking-wide text-gray-400">
+                {scanning ? `Scanning ${scanMarketLabel} market data` : `${scanMarketLabel} information in scan`}
+              </div>
+              <div className="mt-0.5 text-xs font-semibold text-gray-500">{scanSummary}</div>
+            </div>
+          </div>
+          <div className="mt-2 grid grid-cols-2 gap-1.5 text-[10px] font-black uppercase tracking-wide sm:grid-cols-4">
+            {scanSignals.map((item) => (
+              <div key={item} className="truncate rounded-lg bg-black/20 px-2 py-1.5 text-gray-300">{item}</div>
+            ))}
+          </div>
+        </div>
+
         <button onClick={scan} disabled={scanning} className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-brand px-4 py-3 font-black disabled:cursor-wait disabled:opacity-70">
-          <Bot size={17} /> {scanning ? "Scanning..." : `Scan ${scope === "forex" ? "Forex" : "Volatility"}`}
+          {scanning ? <Loader2 size={17} className="animate-spin" /> : <Bot size={17} />}
+          {scanning ? `Scanning ${scanMarketLabel} market` : `Scan ${scanMarketLabel}`}
         </button>
 
         {error && <div className="mt-3 rounded-xl border border-rose-400/25 bg-rose-500/10 p-3 text-sm font-semibold text-rose-300">{error}</div>}
@@ -1734,6 +2025,29 @@ function TradeOutcomeCard({ outcome }: { outcome: TradeOutcome }) {
   );
 }
 
+function SessionCard({ modeLabel, profitLoss, tradesLabel, openCount, detailLabel, detailValue }: { modeLabel: string; profitLoss: number; tradesLabel: string; openCount: number; detailLabel: string; detailValue: string }) {
+  const isProfit = profitLoss >= 0;
+  return (
+    <div className="rounded-lg border border-white/10 bg-white/5 p-3">
+      <div className="mb-2 flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-[10px] font-black uppercase tracking-wide text-gray-500">Session</div>
+          <div className="mt-1 truncate text-sm font-black text-white">{modeLabel}</div>
+        </div>
+        <div className={`shrink-0 text-right text-lg font-black ${isProfit ? "text-emerald-400" : "text-rose-400"}`}>
+          {moneyLabel(profitLoss, true)}
+          <div className="text-[10px] font-black uppercase tracking-wide text-gray-500">P/L</div>
+        </div>
+      </div>
+      <div className="grid grid-cols-3 gap-1.5">
+        <ActivityMetric label="Open" value={String(openCount)} />
+        <ActivityMetric label="Trades" value={tradesLabel} />
+        <ActivityMetric label={detailLabel} value={detailValue} />
+      </div>
+    </div>
+  );
+}
+
 function ActivityPanel({ activeTab, completedPositions, openPositions, transactions, setActiveTab }: { activeTab: ActivityTab; completedPositions: any[]; openPositions: any[]; transactions: any[]; setActiveTab: (tab: ActivityTab) => void }) {
   const tabs = [
     ["open", `Open (${openPositions.length})`],
@@ -1748,7 +2062,7 @@ function ActivityPanel({ activeTab, completedPositions, openPositions, transacti
       </div>
       <div className="mb-3 grid grid-cols-3 gap-1 rounded-lg bg-white/5 p-1 text-[10px] font-bold min-[900px]:text-[11px]">
         {tabs.map(([id, label]) => (
-          <button key={id} onClick={() => setActiveTab(id)} className={`rounded-md px-2 py-2 ${activeTab === id ? "bg-brand !text-ink" : "text-gray-300 hover:bg-white/5"}`}>{label}</button>
+          <button key={id} onClick={() => setActiveTab(id)} className={`min-h-9 rounded-md px-2 py-2 ${activeTab === id ? "bg-brand !text-ink" : "text-gray-300 hover:bg-white/5"}`}>{label}</button>
         ))}
       </div>
       <div className="max-h-72 space-y-2 overflow-auto pr-1">
@@ -1879,17 +2193,33 @@ function WalletDrawer({ initialSection, token, user, transactions, referral, onR
   const [amount, setAmount] = useState(25);
   const [phone, setPhone] = useState(user.mpesa_phone ?? "");
   const [wallet, setWallet] = useState("");
+  const [cryptoReference, setCryptoReference] = useState("");
+  const [selectedDepositCryptoId, setSelectedDepositCryptoId] = useState("");
+  const [selectedWithdrawCryptoId, setSelectedWithdrawCryptoId] = useState("");
   const [notice, setNotice] = useState("");
   const [checkoutUrl, setCheckoutUrl] = useState("");
   const [depositMethod, setDepositMethod] = useState<DepositMethod>("mpesa");
   const [withdrawMethod, setWithdrawMethod] = useState<WithdrawMethod>("mpesa");
   const [deposits, setDeposits] = useState<any[]>([]);
   const [withdrawals, setWithdrawals] = useState<any[]>([]);
-  const [trc20Address, setTrc20Address] = useState("");
+  const [cryptoAddresses, setCryptoAddresses] = useState<CryptoAddressOption[]>([]);
   const [exchangeRate, setExchangeRate] = useState(129.09);
   const [paymentAvailability, setPaymentAvailability] = useState<PaymentAvailability>(defaultPaymentAvailability);
-  const depositMethods = useMemo(() => (["mpesa", "paystack", "card", "trc20"] as DepositMethod[]).filter((item) => paymentAvailability.deposit[item]), [paymentAvailability]);
-  const withdrawMethods = useMemo(() => (["mpesa", "trc20"] as WithdrawMethod[]).filter((item) => paymentAvailability.withdraw[item]), [paymentAvailability]);
+  const depositCryptoNetworks = useMemo(() => paymentAvailability.cryptoNetworks.filter((item) => item.depositEnabled), [paymentAvailability.cryptoNetworks]);
+  const withdrawCryptoNetworks = useMemo(() => paymentAvailability.cryptoNetworks.filter((item) => item.withdrawEnabled), [paymentAvailability.cryptoNetworks]);
+  const depositMethods = useMemo(() => {
+    const methods = (["mpesa", "paystack", "card"] as FiatDepositMethod[]).filter((item) => paymentAvailability.deposit[item]) as DepositMethod[];
+    if (depositCryptoNetworks.length > 0) methods.push("crypto");
+    return methods;
+  }, [depositCryptoNetworks.length, paymentAvailability]);
+  const withdrawMethods = useMemo(() => {
+    const methods: WithdrawMethod[] = paymentAvailability.withdraw.mpesa ? ["mpesa"] : [];
+    if (withdrawCryptoNetworks.length > 0) methods.push("crypto");
+    return methods;
+  }, [paymentAvailability.withdraw.mpesa, withdrawCryptoNetworks.length]);
+  const selectedDepositCrypto = depositCryptoNetworks.find((item) => item.id === selectedDepositCryptoId) ?? depositCryptoNetworks[0];
+  const selectedWithdrawCrypto = withdrawCryptoNetworks.find((item) => item.id === selectedWithdrawCryptoId) ?? withdrawCryptoNetworks[0];
+  const selectedCryptoAddress = selectedDepositCrypto ? cryptoAddresses.find((item) => item.assetSymbol === selectedDepositCrypto.assetSymbol && item.network === selectedDepositCrypto.network) : undefined;
 
   async function loadPayments() {
     if (!token) return;
@@ -1897,19 +2227,20 @@ function WalletDrawer({ initialSection, token, user, transactions, referral, onR
     const [depositData, withdrawalData, addressData, rateData, methodData] = await Promise.all([
       fetchJson<{ deposits: any[] }>("/api/auth/deposits", { headers }, { deposits: [] }).catch(() => ({ deposits: [] })),
       fetchJson<{ withdrawals: any[] }>("/api/withdrawals/history", { headers }, { withdrawals: [] }).catch(() => ({ withdrawals: [] })),
-      fetchJson<{ address: string }>("/api/auth/trc20/my-address", { headers }, { address: "" }).catch(() => ({ address: "" })),
+      fetchJson<{ addresses: CryptoAddressOption[] }>("/api/auth/crypto/addresses", { headers }, { addresses: [] }).catch(() => ({ addresses: [] })),
       fetchJson<{ rate: number }>("/api/auth/exchange-rate", { headers }, { rate: 129.09 }).catch(() => ({ rate: 129.09 })),
       fetchJson<PaymentAvailability>("/api/auth/payment-methods", { headers }, defaultPaymentAvailability).catch(() => defaultPaymentAvailability),
     ]);
     setDeposits(depositData.deposits ?? []);
     setWithdrawals(withdrawalData.withdrawals ?? []);
-    setTrc20Address(addressData.address ?? "");
+    setCryptoAddresses(addressData.addresses ?? []);
     setExchangeRate(Number(rateData.rate ?? 129.09));
     setPaymentAvailability({
       ...defaultPaymentAvailability,
       ...methodData,
       deposit: { ...defaultPaymentAvailability.deposit, ...(methodData.deposit ?? {}) },
       withdraw: { ...defaultPaymentAvailability.withdraw, ...(methodData.withdraw ?? {}) },
+      cryptoNetworks: methodData.cryptoNetworks ?? [],
     });
   }
 
@@ -1925,6 +2256,18 @@ function WalletDrawer({ initialSection, token, user, transactions, referral, onR
     if (!withdrawMethods.includes(withdrawMethod) && withdrawMethods[0]) setWithdrawMethod(withdrawMethods[0]);
   }, [withdrawMethod, withdrawMethods]);
 
+  useEffect(() => {
+    if ((!selectedDepositCryptoId || !depositCryptoNetworks.some((item) => item.id === selectedDepositCryptoId)) && depositCryptoNetworks[0]) {
+      setSelectedDepositCryptoId(depositCryptoNetworks[0].id);
+    }
+  }, [depositCryptoNetworks, selectedDepositCryptoId]);
+
+  useEffect(() => {
+    if ((!selectedWithdrawCryptoId || !withdrawCryptoNetworks.some((item) => item.id === selectedWithdrawCryptoId)) && withdrawCryptoNetworks[0]) {
+      setSelectedWithdrawCryptoId(withdrawCryptoNetworks[0].id);
+    }
+  }, [selectedWithdrawCryptoId, withdrawCryptoNetworks]);
+
   async function post(url: string, body: Record<string, unknown>) {
     if (!token) return;
     const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify(body) });
@@ -1939,63 +2282,91 @@ function WalletDrawer({ initialSection, token, user, transactions, referral, onR
 
   return (
     <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm" onClick={onClose}>
-      <div className="ml-auto h-full w-full max-w-md overflow-auto bg-panel p-4 sm:p-5" onClick={(e) => e.stopPropagation()}>
-        <div className="mb-5 flex items-center justify-between"><h2 className="text-xl font-black">Trader's Hub</h2><button onClick={onClose}>Close</button></div>
-        <div className="mb-5 grid grid-cols-2 gap-2 text-xs font-bold sm:grid-cols-4">
+      <div className="ml-auto flex h-full w-full max-w-md flex-col overflow-hidden bg-panel p-3 sm:p-4" onClick={(e) => e.stopPropagation()}>
+        <div className="mb-3 flex shrink-0 items-center justify-between">
+          <div>
+            <h2 className="text-lg font-black">Trader's Hub</h2>
+            <div className="mt-1 flex flex-wrap gap-2 text-[11px] font-bold text-gray-400">
+              <span>Real ${user.real_balance.toFixed(2)}</span>
+              <span>Demo ${user.demo_balance.toFixed(2)}</span>
+            </div>
+          </div>
+          <button onClick={onClose} className="rounded-lg bg-white/5 px-3 py-1.5 text-xs font-bold">Close</button>
+        </div>
+        <div className="mb-3 grid shrink-0 grid-cols-4 gap-1.5 text-[11px] font-bold">
           {(["deposit", "withdraw", "history", "referrals"] as const).map((item) => (
-            <button key={item} onClick={() => setSection(item)} className={`rounded-lg px-2 py-2 capitalize ${section === item ? "bg-brand" : "bg-white/5"}`}>{item}</button>
+            <button key={item} onClick={() => setSection(item)} className={`rounded-lg px-1.5 py-2 capitalize ${section === item ? "bg-brand" : "bg-white/5"}`}>{item}</button>
           ))}
         </div>
-        <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <div className="glass rounded-2xl p-4"><div className="text-xs text-gray-500">Real Account</div><div className="text-xl font-black sm:text-2xl">${user.real_balance.toFixed(2)}</div></div>
-          <div className="glass rounded-2xl p-4"><div className="text-xs text-gray-500">Demo Account</div><div className="text-xl font-black sm:text-2xl">${user.demo_balance.toFixed(2)}</div></div>
-        </div>
+        <div className="min-h-0 flex-1 overflow-auto pr-1">
         {(section === "deposit" || section === "withdraw") && (
-          <div className="mb-4 grid gap-3">
-            <label className="block text-sm font-medium">Amount (USD)<input className="field mt-2" type="number" value={amount} onChange={(e) => setAmount(Number(e.target.value))} /></label>
-            <div className="grid grid-cols-1 gap-2 text-xs sm:grid-cols-3">
-              <div className="rounded-xl bg-white/5 p-3"><div className="text-gray-500">KES estimate</div><div className="font-black">KES {(amount * exchangeRate).toFixed(0)}</div></div>
-              <div className="rounded-xl bg-white/5 p-3"><div className="text-gray-500">Rate</div><div className="font-black">{exchangeRate.toFixed(2)}</div></div>
-              <div className="rounded-xl bg-white/5 p-3"><div className="text-gray-500">Mode</div><div className="font-black">{paymentAvailability.mode === "live" ? "Live" : "Sandbox"}</div></div>
+          <div className="mb-3 grid grid-cols-[minmax(0,1fr)_116px] gap-2">
+            <label className="block text-xs font-bold text-gray-400">Amount USD<input className="field mt-1 !h-9 !rounded-lg !px-3 !py-1.5 text-sm font-black" type="number" value={amount} onChange={(e) => setAmount(Number(e.target.value))} /></label>
+            <div className="rounded-lg bg-white/5 px-3 py-2 text-xs">
+              <div className="truncate font-black">KES {(amount * exchangeRate).toFixed(0)}</div>
+              <div className="mt-0.5 text-[10px] font-bold text-gray-500">{paymentAvailability.mode === "live" ? "Live" : "Sandbox"} mode</div>
             </div>
           </div>
         )}
         {section === "deposit" && (
           <>
-            {depositMethods.length > 0 ? <div className="mb-4 grid grid-cols-2 gap-2 text-xs font-bold sm:grid-cols-4">
+            {depositMethods.length > 0 ? <div className="mb-3 grid grid-cols-4 gap-1.5 text-[11px] font-bold">
               {depositMethods.map((item) => (
-                <button key={item} onClick={() => setDepositMethod(item)} className={`rounded-lg px-2 py-2 uppercase ${depositMethod === item ? "bg-brand" : "bg-white/5"}`}>{item}</button>
+                <button key={item} onClick={() => setDepositMethod(item)} className={`min-h-8 rounded-lg px-1.5 py-1.5 ${depositMethod === item ? "bg-brand" : "bg-white/5"}`}>{paymentMethodLabel(item)}</button>
               ))}
-            </div> : <div className="mb-4 rounded-xl bg-white/5 p-3 text-sm text-gray-300">Deposits are currently disabled by admin.</div>}
-            {paymentAvailability.deposit.mpesa && depositMethod === "mpesa" && <label className="mb-4 block text-sm font-medium">M-Pesa phone<input className="field mt-2" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="0712345678 or 254712345678" /></label>}
-            {paymentAvailability.deposit.trc20 && depositMethod === "trc20" && (
-              <div className="mb-4 rounded-2xl border border-white/10 bg-white/5 p-4">
-                <div className="text-xs font-bold uppercase tracking-wider text-gray-500">TRC20 deposit address</div>
-                <div className="mt-2 break-all font-mono text-sm text-brand">{trc20Address || "Loading address..."}</div>
-                <button onClick={() => trc20Address && navigator.clipboard?.writeText(trc20Address).then(() => setNotice("TRC20 address copied"))} className="mt-3 rounded-xl bg-white/10 px-3 py-2 text-xs font-bold">Copy address</button>
+            </div> : <div className="mb-3 rounded-lg bg-white/5 p-2 text-xs text-gray-300">Deposits are currently disabled by admin.</div>}
+            {paymentAvailability.deposit.mpesa && depositMethod === "mpesa" && <label className="mb-3 block text-xs font-bold text-gray-400">M-Pesa phone<input className="field mt-1 !h-9 !rounded-lg !px-3 !py-1.5 text-sm" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="0712345678 or 254712345678" /></label>}
+            {depositMethod === "crypto" && selectedDepositCrypto && (
+              <div className="mb-3 rounded-xl border border-white/10 bg-white/5 p-3">
+                <label className="block text-xs font-bold text-gray-400">Network
+                  <select className="field mt-1 !h-9 !rounded-lg !px-3 !py-1.5 text-sm font-bold" value={selectedDepositCrypto.id} onChange={(e) => setSelectedDepositCryptoId(e.target.value)}>
+                    {depositCryptoNetworks.map((item) => <option key={item.id} value={item.id}>{cryptoNetworkLabel(item)} - {item.chainName}</option>)}
+                  </select>
+                </label>
+                <div className="mt-2 grid grid-cols-[1fr_auto] items-center gap-2 rounded-lg bg-black/20 p-2">
+                  <div className="min-w-0">
+                    <div className="truncate text-[10px] font-bold uppercase tracking-wide text-gray-500">{cryptoNetworkLabel(selectedDepositCrypto)} address</div>
+                    <div className="truncate font-mono text-xs text-brand">{selectedCryptoAddress?.address || "Loading address..."}</div>
+                  </div>
+                  <button onClick={() => selectedCryptoAddress?.address && navigator.clipboard?.writeText(selectedCryptoAddress.address).then(() => setNotice(`${cryptoNetworkLabel(selectedDepositCrypto)} address copied`))} className="rounded-lg bg-white/10 px-2 py-1.5 text-[11px] font-bold">Copy</button>
+                </div>
+                <label className="mt-2 block text-xs font-bold text-gray-400">Tx hash / reference<input className="field mt-1 !h-9 !rounded-lg !px-3 !py-1.5 text-sm" value={cryptoReference} onChange={(e) => setCryptoReference(e.target.value)} placeholder="Paste transaction hash" /></label>
               </div>
             )}
-            <div className="mb-5 grid gap-3">
-              {paymentAvailability.deposit.mpesa && depositMethod === "mpesa" && <button onClick={() => post("/api/auth/mpesa/stk-push", { amount, phone })} className="inline-flex items-center justify-center gap-2 rounded-xl bg-brand px-4 py-3 font-bold"><Smartphone size={16} /> Send M-Pesa STK Push</button>}
-              {paymentAvailability.deposit.paystack && depositMethod === "paystack" && <button onClick={() => post("/api/auth/paystack/initialize", { amount })} className="inline-flex items-center justify-center gap-2 rounded-xl bg-brand px-4 py-3 font-bold"><CreditCard size={16} /> Pay with Paystack</button>}
-              {paymentAvailability.deposit.card && depositMethod === "card" && <button onClick={() => post("/api/auth/card/deposit", { amount })} className="inline-flex items-center justify-center gap-2 rounded-xl bg-brand px-4 py-3 font-bold"><CreditCard size={16} /> Sandbox Card Credit</button>}
-              {paymentAvailability.deposit.trc20 && depositMethod === "trc20" && <div className="rounded-xl bg-white/5 p-3 text-sm text-gray-300">Crypto deposits are reviewed before crediting. Send testnet funds only, then contact support with the transaction reference.</div>}
+            <div className="grid gap-2">
+              {paymentAvailability.deposit.mpesa && depositMethod === "mpesa" && <button onClick={() => post("/api/auth/mpesa/stk-push", { amount, phone })} className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-brand px-4 text-sm font-bold"><Smartphone size={16} /> Send M-Pesa STK Push</button>}
+              {paymentAvailability.deposit.paystack && depositMethod === "paystack" && <button onClick={() => post("/api/auth/paystack/initialize", { amount })} className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-brand px-4 text-sm font-bold"><CreditCard size={16} /> Pay with Paystack</button>}
+              {paymentAvailability.deposit.card && depositMethod === "card" && <button onClick={() => post("/api/auth/card/deposit", { amount })} className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-brand px-4 text-sm font-bold"><CreditCard size={16} /> Sandbox Card Credit</button>}
+              {depositMethod === "crypto" && selectedDepositCrypto && <button onClick={() => post("/api/auth/crypto/deposit", { amount, assetSymbol: selectedDepositCrypto.assetSymbol, network: selectedDepositCrypto.network, reference: cryptoReference })} className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-brand px-4 text-sm font-bold"><Wallet size={16} /> Submit Review</button>}
+              {depositMethod === "crypto" && <div className="rounded-lg bg-white/5 p-2 text-xs text-gray-300">Send testnet funds, then submit the tx reference for admin review.</div>}
             </div>
           </>
         )}
         {section === "withdraw" && (
           <>
-            {withdrawMethods.length > 0 ? <div className="mb-4 grid grid-cols-2 gap-2 text-xs font-bold">
+            {withdrawMethods.length > 0 ? <div className="mb-3 grid grid-cols-2 gap-1.5 text-[11px] font-bold">
               {withdrawMethods.map((item) => (
-                <button key={item} onClick={() => setWithdrawMethod(item)} className={`rounded-lg px-2 py-2 uppercase ${withdrawMethod === item ? "bg-brand" : "bg-white/5"}`}>{item}</button>
+                <button key={item} onClick={() => setWithdrawMethod(item)} className={`min-h-8 rounded-lg px-2 py-1.5 ${withdrawMethod === item ? "bg-brand" : "bg-white/5"}`}>{paymentMethodLabel(item)}</button>
               ))}
-            </div> : <div className="mb-4 rounded-xl bg-white/5 p-3 text-sm text-gray-300">Withdrawals are currently disabled by admin.</div>}
-            {paymentAvailability.withdraw.mpesa && withdrawMethod === "mpesa" && <label className="mb-4 block text-sm font-medium">M-Pesa phone<input className="field mt-2" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="0712345678 or 254712345678" /></label>}
-            {paymentAvailability.withdraw.trc20 && withdrawMethod === "trc20" && <label className="mb-4 block text-sm font-medium">TRC20 wallet for withdrawal<input className="field mt-2" value={wallet} onChange={(e) => setWallet(e.target.value)} placeholder="T..." /></label>}
-            {withdrawMethods.length > 0 && <button onClick={() => post("/api/withdrawals/submit", { amount, method: withdrawMethod, walletAddress: withdrawMethod === "trc20" ? wallet : phone })} className="mb-5 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-white/10 px-4 py-3 font-bold"><Banknote size={16} /> Submit Withdrawal</button>}
+            </div> : <div className="mb-3 rounded-lg bg-white/5 p-2 text-xs text-gray-300">Withdrawals are currently disabled by admin.</div>}
+            {paymentAvailability.withdraw.mpesa && withdrawMethod === "mpesa" && <label className="mb-3 block text-xs font-bold text-gray-400">M-Pesa phone<input className="field mt-1 !h-9 !rounded-lg !px-3 !py-1.5 text-sm" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="0712345678 or 254712345678" /></label>}
+            {withdrawMethod === "crypto" && selectedWithdrawCrypto && (
+              <div className="mb-3 rounded-xl border border-white/10 bg-white/5 p-3">
+                <label className="block text-xs font-bold text-gray-400">Network
+                  <select className="field mt-1 !h-9 !rounded-lg !px-3 !py-1.5 text-sm font-bold" value={selectedWithdrawCrypto.id} onChange={(e) => setSelectedWithdrawCryptoId(e.target.value)}>
+                    {withdrawCryptoNetworks.map((item) => <option key={item.id} value={item.id}>{cryptoNetworkLabel(item)} - fee {item.fee}, min {item.minWithdraw}</option>)}
+                  </select>
+                </label>
+                <div className="mt-2 rounded-lg bg-black/20 px-2 py-1.5 text-[11px] font-bold text-gray-400">
+                  {selectedWithdrawCrypto.chainName} - {selectedWithdrawCrypto.testnet ? "testnet" : "live"} - min {selectedWithdrawCrypto.minWithdraw}
+                </div>
+                <label className="mt-2 block text-xs font-bold text-gray-400">Destination wallet<input className="field mt-1 !h-9 !rounded-lg !px-3 !py-1.5 text-sm" value={wallet} onChange={(e) => setWallet(e.target.value)} placeholder={selectedWithdrawCrypto.network === "BTC" ? "tb1q..." : selectedWithdrawCrypto.network === "TRC20" ? "T..." : "0x..."} /></label>
+              </div>
+            )}
+            {withdrawMethods.length > 0 && <button onClick={() => post("/api/withdrawals/submit", withdrawMethod === "crypto" && selectedWithdrawCrypto ? { amount, method: "crypto", assetSymbol: selectedWithdrawCrypto.assetSymbol, network: selectedWithdrawCrypto.network, walletAddress: wallet } : { amount, method: "mpesa", walletAddress: phone })} className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-white/10 px-4 text-sm font-bold"><Banknote size={16} /> Submit Withdrawal</button>}
           </>
         )}
-        {notice && <div className="mb-5 rounded-xl bg-white/5 p-3 text-sm text-gray-300">{notice}{checkoutUrl && <a className="mt-2 block font-bold text-brand" href={checkoutUrl} target="_blank">Open checkout</a>}</div>}
+        {notice && <div className="mt-2 rounded-lg bg-white/5 p-2 text-xs text-gray-300">{notice}{checkoutUrl && <a className="mt-1 block font-bold text-brand" href={checkoutUrl} target="_blank">Open checkout</a>}</div>}
         {section === "referrals" && (
           <div className="mb-5 glass rounded-2xl p-4">
             <div className="mb-2 flex items-center justify-between">
@@ -2021,9 +2392,27 @@ function WalletDrawer({ initialSection, token, user, transactions, referral, onR
             </div>
           </>
         )}
+        </div>
       </div>
     </div>
   );
+}
+
+function paymentMethodLabel(method: string) {
+  if (method === "mpesa") return "M-Pesa";
+  if (method === "paystack") return "Paystack";
+  if (method === "card") return "Card";
+  if (method === "crypto") return "Web3";
+  if (method.startsWith("crypto:")) {
+    const [, asset, network] = method.split(":");
+    return `${asset ?? "Crypto"} ${network ?? ""}`.trim();
+  }
+  if (method === "trc20") return "USDT TRC20";
+  return method.toUpperCase();
+}
+
+function cryptoNetworkLabel(network: Pick<CryptoNetworkOption, "assetSymbol" | "network">) {
+  return `${network.assetSymbol} ${network.network}`;
 }
 
 function PaymentMiniList({ title, rows }: { title: string; rows: any[] }) {
@@ -2037,7 +2426,7 @@ function PaymentMiniList({ title, rows }: { title: string; rows: any[] }) {
         {rows.length === 0 && <div className="text-xs text-gray-500">No records yet.</div>}
         {rows.slice(0, 8).map((item) => (
           <div key={item.id} className="rounded-xl bg-black/20 p-2 text-xs">
-            <div className="flex justify-between gap-2"><span className="font-bold">{String(item.method).toUpperCase()} ${Number(item.amount).toFixed(2)}</span><span className={item.status === "completed" ? "text-emerald-300" : item.status === "rejected" ? "text-rose-300" : "text-amber-300"}>{item.status}</span></div>
+            <div className="flex justify-between gap-2"><span className="font-bold">{paymentMethodLabel(String(item.method))} ${Number(item.amount).toFixed(2)}</span><span className={item.status === "completed" ? "text-emerald-300" : item.status === "rejected" ? "text-rose-300" : "text-amber-300"}>{item.status}</span></div>
             <div className="mt-1 truncate text-gray-500">{item.reference ?? item.provider_reference ?? item.wallet_address ?? item.created_at}</div>
           </div>
         ))}

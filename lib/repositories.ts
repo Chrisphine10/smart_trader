@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { db, getUserById, money, type User } from "./db";
 import { assets, chooseSmartDigitContract, isDirection, isForexAsset, potentialPayout, resolveDigitTrade, type Direction } from "./trading";
 
@@ -12,6 +12,23 @@ export type Tick = {
   digitStats?: Record<string, number>;
   movement?: number;
   volatility?: number;
+};
+
+export type CryptoNetworkOption = {
+  id: string;
+  assetSymbol: string;
+  assetName: string;
+  network: string;
+  chainName: string;
+  testnet: boolean;
+  depositEnabled: boolean;
+  withdrawEnabled: boolean;
+  fee: number;
+  minWithdraw: number;
+};
+
+export type CryptoAddressOption = CryptoNetworkOption & {
+  address: string;
 };
 
 export function calculateEscrowSplit(grossPayout: number, percent: number, escrowBase = grossPayout) {
@@ -131,10 +148,11 @@ export function settleOpenPositions(userId: string, asset: string, tick: Tick) {
     const won = isPriceContract
       ? direction === "over" ? tick.price > Number(row.entry_price ?? tick.price) : tick.price < Number(row.entry_price ?? tick.price)
       : resolveDigitTrade(direction, selectedDigit, tick.lastDigit);
-    const escrowPercent = Number(getAppSetting("escrow.winPayoutPercent", "10"));
-    const escrowAddress = getAppSetting("escrow.bitcoinAddress", "bitcoin:BC1Q2JYAXPRTDMWVGY6E6YKX2E9K9RYSRG68DZ528W");
     const grossProfit = Math.max(0, money(grossPayout - stake));
-    const { escrowFee, netPayout } = won ? calculateEscrowSplit(grossPayout, escrowPercent, grossProfit) : { escrowFee: 0, netPayout: 0 };
+    const shouldApplyEscrow = won && !isDemo;
+    const escrowPercent = shouldApplyEscrow ? Number(getAppSetting("escrow.winPayoutPercent", "10")) : 0;
+    const escrowAddress = shouldApplyEscrow ? getAppSetting("escrow.bitcoinAddress", "bitcoin:BC1Q2JYAXPRTDMWVGY6E6YKX2E9K9RYSRG68DZ528W") : "";
+    const { escrowFee, netPayout } = shouldApplyEscrow ? calculateEscrowSplit(grossPayout, escrowPercent, grossProfit) : won ? { escrowFee: 0, netPayout: grossPayout } : { escrowFee: 0, netPayout: 0 };
     const profitLoss = won ? money(netPayout - stake) : money(-stake);
     const balanceAfter = won ? money(activeBalance + netPayout) : money(activeBalance);
     const balanceAfterGrossPayout = won ? money(activeBalance + grossPayout) : balanceAfter;
@@ -478,6 +496,152 @@ export function updateAppSettings(values: Record<string, string>) {
   return listAppSettings();
 }
 
+export function listCryptoNetworks(includeDisabled = false): CryptoNetworkOption[] {
+  const rows = db.prepare(`
+    SELECT exchange_networks.*, exchange_assets.name AS asset_name
+    FROM exchange_networks
+    JOIN exchange_assets ON exchange_assets.symbol = exchange_networks.asset_symbol
+    WHERE exchange_assets.enabled = 1
+      AND (? = 1 OR exchange_networks.deposit_enabled = 1 OR exchange_networks.withdraw_enabled = 1)
+    ORDER BY
+      CASE exchange_networks.asset_symbol WHEN 'USDT' THEN 1 WHEN 'ETH' THEN 2 WHEN 'BTC' THEN 3 ELSE 4 END,
+      exchange_networks.asset_symbol,
+      exchange_networks.network
+  `).all(includeDisabled ? 1 : 0) as Array<Record<string, unknown>>;
+  return rows.map(normalizeCryptoNetworkRow);
+}
+
+export function getCryptoNetwork(assetSymbol: string, network: string, action?: "deposit" | "withdraw") {
+  const row = db.prepare(`
+    SELECT exchange_networks.*, exchange_assets.name AS asset_name
+    FROM exchange_networks
+    JOIN exchange_assets ON exchange_assets.symbol = exchange_networks.asset_symbol
+    WHERE exchange_assets.enabled = 1
+      AND upper(exchange_networks.asset_symbol) = upper(?)
+      AND upper(exchange_networks.network) = upper(?)
+    LIMIT 1
+  `).get(assetSymbol, network) as Record<string, unknown> | undefined;
+  if (!row) throw new Error("Crypto network is not supported");
+  const option = normalizeCryptoNetworkRow(row);
+  if (action === "deposit" && !option.depositEnabled) throw new Error(`${option.assetSymbol} ${option.network} deposits are disabled by admin`);
+  if (action === "withdraw" && !option.withdrawEnabled) throw new Error(`${option.assetSymbol} ${option.network} withdrawals are disabled by admin`);
+  return option;
+}
+
+export function updateCryptoNetworkSettings(networks: Array<{ id?: string; assetSymbol?: string; network?: string; depositEnabled?: boolean; withdrawEnabled?: boolean }>) {
+  const byId = db.prepare("SELECT asset_symbol, network FROM exchange_networks WHERE id = ?");
+  const bySymbol = db.prepare("SELECT id, asset_symbol, network FROM exchange_networks WHERE upper(asset_symbol) = upper(?) AND upper(network) = upper(?)");
+  const update = db.prepare("UPDATE exchange_networks SET deposit_enabled = ?, withdraw_enabled = ? WHERE id = ?");
+  const legacyTrc20Settings: Record<string, string> = {};
+
+  networks.forEach((item) => {
+    const row = item.id
+      ? byId.get(item.id) as { asset_symbol: string; network: string } | undefined
+      : bySymbol.get(item.assetSymbol ?? "", item.network ?? "") as { id: string; asset_symbol: string; network: string } | undefined;
+    if (!row) return;
+    const id = item.id ?? (row as { id?: string }).id;
+    if (!id) return;
+    const current = getCryptoNetwork(row.asset_symbol, row.network);
+    const depositEnabled = typeof item.depositEnabled === "boolean" ? item.depositEnabled : current.depositEnabled;
+    const withdrawEnabled = typeof item.withdrawEnabled === "boolean" ? item.withdrawEnabled : current.withdrawEnabled;
+    update.run(depositEnabled ? 1 : 0, withdrawEnabled ? 1 : 0, id);
+    if (row.asset_symbol.toUpperCase() === "USDT" && row.network.toUpperCase() === "TRC20") {
+      legacyTrc20Settings["trc20.enabled"] = depositEnabled ? "true" : "false";
+      legacyTrc20Settings["trc20.withdrawals.enabled"] = withdrawEnabled ? "true" : "false";
+    }
+  });
+
+  if (Object.keys(legacyTrc20Settings).length > 0) updateAppSettings(legacyTrc20Settings);
+  return listCryptoNetworks(true);
+}
+
+export function ensureCryptoAddress(user: User, assetSymbol: string, network: string): CryptoAddressOption {
+  const option = getCryptoNetwork(assetSymbol, network);
+  const existing = db.prepare(`
+    SELECT address
+    FROM wallet_addresses
+    WHERE user_id = ? AND upper(asset_symbol) = upper(?) AND upper(network) = upper(?)
+    LIMIT 1
+  `).get(user.id, option.assetSymbol, option.network) as { address: string } | undefined;
+  if (existing?.address) return { ...option, address: existing.address };
+
+  const address = option.assetSymbol === "USDT" && option.network === "TRC20" ? user.trc20_address : cryptoAddress(option);
+  db.prepare(`
+    INSERT INTO wallet_addresses (id, user_id, asset_symbol, network, address, encrypted_private_key, testnet)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(randomUUID(), user.id, option.assetSymbol, option.network, address, `manual-review:${randomBytes(24).toString("hex")}`, option.testnet ? 1 : 0);
+  return { ...option, address };
+}
+
+export function listUserCryptoAddresses(user: User): CryptoAddressOption[] {
+  return listCryptoNetworks()
+    .filter((network) => network.depositEnabled)
+    .map((network) => ensureCryptoAddress(user, network.assetSymbol, network.network));
+}
+
+export function recordManualCryptoDeposit(user: User, input: { amount: number; assetSymbol: string; network: string; reference: string }) {
+  const amount = money(input.amount);
+  if (amount <= 0) throw new Error("Deposit amount must be greater than zero");
+  const reference = String(input.reference ?? "").trim();
+  if (!reference) throw new Error("Transaction reference is required");
+  const network = getCryptoNetwork(input.assetSymbol, input.network, "deposit");
+  const id = randomUUID();
+  const method = cryptoMethod(network.assetSymbol, network.network);
+  db.prepare(`
+    INSERT INTO deposits (id, user_id, method, amount, status, reference, provider_reference, is_demo, provider_status)
+    VALUES (?, ?, ?, ?, 'pending', ?, ?, 0, 'manual_review')
+  `).run(id, user.id, method, amount, reference, reference);
+  return {
+    id,
+    amount,
+    method,
+    status: "pending",
+    reference,
+    message: `${network.assetSymbol} ${network.network} deposit submitted for admin review`,
+  };
+}
+
+function normalizeCryptoNetworkRow(row: Record<string, unknown>): CryptoNetworkOption {
+  const assetSymbol = String(row.asset_symbol ?? "").toUpperCase();
+  const network = String(row.network ?? "").toUpperCase();
+  const isLegacyTrc20 = assetSymbol === "USDT" && network === "TRC20";
+  const depositEnabled = Boolean(Number(row.deposit_enabled ?? 0)) && (!isLegacyTrc20 || getAppSetting("trc20.enabled", "true") === "true");
+  const withdrawEnabled = Boolean(Number(row.withdraw_enabled ?? 0)) && (!isLegacyTrc20 || getAppSetting("trc20.withdrawals.enabled", "true") === "true");
+  return {
+    id: String(row.id ?? ""),
+    assetSymbol,
+    assetName: String(row.asset_name ?? assetSymbol),
+    network,
+    chainName: String(row.chain_name ?? network),
+    testnet: Boolean(Number(row.testnet ?? 0)),
+    depositEnabled,
+    withdrawEnabled,
+    fee: Number(row.fee ?? 0),
+    minWithdraw: Number(row.min_withdraw ?? 0),
+  };
+}
+
+function cryptoAddress(network: CryptoNetworkOption) {
+  if (network.network === "TRC20") return `T${randomBytes(17).toString("hex").slice(0, 33)}`;
+  if (network.network === "ERC20" || network.network === "BSC" || network.assetSymbol === "ETH" || network.assetSymbol === "BNB" || network.chainName.toLowerCase().includes("ethereum")) return `0x${randomBytes(20).toString("hex")}`;
+  if (network.assetSymbol === "BTC" || network.network === "BTC") return `tb1q${randomBytes(20).toString("hex").slice(0, 38)}`;
+  if (network.assetSymbol === "SOL" || network.network === "SOL") return randomBase58(44);
+  if (network.assetSymbol === "XRP" || network.network === "XRP") return `r${randomBase58(33)}`;
+  if (network.assetSymbol === "LTC" || network.network === "LTC") return `tltc1q${randomBytes(20).toString("hex").slice(0, 38)}`;
+  if (network.assetSymbol === "DOGE" || network.network === "DOGE") return `n${randomBase58(33)}`;
+  return `${network.assetSymbol.toLowerCase()}_${network.network.toLowerCase()}_${randomBytes(16).toString("hex")}`;
+}
+
+function randomBase58(length: number) {
+  const alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+  const bytes = randomBytes(length);
+  return Array.from(bytes, (byte) => alphabet[byte % alphabet.length]).join("");
+}
+
+function cryptoMethod(assetSymbol: string, network: string) {
+  return `crypto:${assetSymbol.toUpperCase()}:${network.toUpperCase()}`;
+}
+
 export function listRiskSettings() {
   const settings = listAppSettings();
   return Object.fromEntries(Object.entries(settings).filter(([key]) => key.startsWith("risk.") || key.startsWith("escrow.")));
@@ -533,13 +697,12 @@ export function reviewKyc(adminId: string, submissionId: string, status: "approv
   return db.prepare("SELECT * FROM kyc_submissions WHERE id = ?").get(submissionId);
 }
 
-export function submitWithdrawal(user: User, method: string, amount: number, walletAddress?: string) {
-  const normalizedMethod = method.toLowerCase();
-  if (!["mpesa", "trc20"].includes(normalizedMethod)) throw new Error("Unsupported withdrawal method");
-  if (normalizedMethod === "mpesa" && getAppSetting("mpesa.withdrawals.enabled", "true") !== "true") throw new Error("M-Pesa withdrawals are disabled by admin");
-  if (normalizedMethod === "trc20" && getAppSetting("trc20.withdrawals.enabled", "true") !== "true") throw new Error("TRC20 withdrawals are disabled by admin");
+export function submitWithdrawal(user: User, method: string | { method: string; assetSymbol?: string; network?: string; walletAddress?: string }, amount: number, walletAddress?: string) {
+  const withdrawal = normalizeWithdrawalMethod(method, walletAddress);
+  if (withdrawal.method === "mpesa" && getAppSetting("mpesa.withdrawals.enabled", "true") !== "true") throw new Error("M-Pesa withdrawals are disabled by admin");
   const minWithdrawal = Number(getAppSetting("payments.minWithdrawal", "1"));
   if (amount < minWithdrawal) throw new Error(`Minimum withdrawal is $${minWithdrawal}`);
+  if (withdrawal.method !== "mpesa" && !withdrawal.walletAddress) throw new Error("Withdrawal wallet address is required");
   const isDemo = Boolean(user.is_demo);
   if (!isDemo && (user.kyc_status ?? "unverified") !== "approved") throw new Error("KYC approval is required before withdrawals");
   const maxWithdrawal = Number(getAppSetting("risk.maxWithdrawal", "5000"));
@@ -555,8 +718,8 @@ export function submitWithdrawal(user: User, method: string, amount: number, wal
   const next = money(currentBalance - amount);
   db.exec("BEGIN");
   try {
-    db.prepare("INSERT INTO withdrawals (id, user_id, method, amount, wallet_address, status, completed_at, is_demo) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run(id, user.id, normalizedMethod, amount, walletAddress ?? null, isDemo ? "completed" : "pending", isDemo ? new Date().toISOString() : null, isDemo ? 1 : 0);
-    db.prepare("INSERT INTO transactions (id, user_id, type, amount, balance_after, description) VALUES (?, ?, 'withdrawal', ?, ?, ?)").run(randomUUID(), user.id, -amount, next, `${isDemo ? "Sandbox demo" : "Manual review"} ${normalizedMethod} withdrawal submitted`);
+    db.prepare("INSERT INTO withdrawals (id, user_id, method, amount, wallet_address, status, completed_at, is_demo) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run(id, user.id, withdrawal.method, amount, withdrawal.walletAddress ?? null, isDemo ? "completed" : "pending", isDemo ? new Date().toISOString() : null, isDemo ? 1 : 0);
+    db.prepare("INSERT INTO transactions (id, user_id, type, amount, balance_after, description) VALUES (?, ?, 'withdrawal', ?, ?, ?)").run(randomUUID(), user.id, -amount, next, `${isDemo ? "Sandbox demo" : "Manual review"} ${withdrawal.method} withdrawal submitted`);
     updateUserBalance(user, isDemo, next);
     db.exec("COMMIT");
   } catch (error) {
@@ -564,6 +727,33 @@ export function submitWithdrawal(user: User, method: string, amount: number, wal
     throw error;
   }
   return { id, amount, status: "pending", balance: next };
+}
+
+function normalizeWithdrawalMethod(input: string | { method: string; assetSymbol?: string; network?: string; walletAddress?: string }, legacyWalletAddress?: string) {
+  if (typeof input === "string") {
+    const normalizedMethod = input.toLowerCase();
+    if (normalizedMethod === "mpesa") return { method: "mpesa", walletAddress: legacyWalletAddress };
+    if (normalizedMethod === "trc20") {
+      getCryptoNetwork("USDT", "TRC20", "withdraw");
+      return { method: "trc20", walletAddress: legacyWalletAddress };
+    }
+    throw new Error("Unsupported withdrawal method");
+  }
+
+  const normalizedMethod = String(input.method ?? "").toLowerCase();
+  if (normalizedMethod === "mpesa") return { method: "mpesa", walletAddress: input.walletAddress ?? legacyWalletAddress };
+  if (normalizedMethod === "trc20") {
+    getCryptoNetwork("USDT", "TRC20", "withdraw");
+    return { method: "trc20", walletAddress: input.walletAddress ?? legacyWalletAddress };
+  }
+  if (normalizedMethod === "crypto") {
+    const network = getCryptoNetwork(String(input.assetSymbol ?? ""), String(input.network ?? ""), "withdraw");
+    return {
+      method: cryptoMethod(network.assetSymbol, network.network),
+      walletAddress: input.walletAddress ?? legacyWalletAddress,
+    };
+  }
+  throw new Error("Unsupported withdrawal method");
 }
 
 export function listPaymentOperations() {
