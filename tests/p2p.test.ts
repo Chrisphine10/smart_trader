@@ -38,18 +38,18 @@ describe("P2P escrow lifecycle", () => {
       availableAmount: 25,
       minLimit: 500,
       maxLimit: 10000,
-      paymentMethods: "M-Pesa,Bank Transfer",
+      paymentMethods: "BTC,ETH",
     }) as Record<string, any>;
 
     expect(ad.available_amount).toBe(25);
     expect(getCryptoBalance(seller.id, "USDT")).toMatchObject({ available: 75, locked: 25 });
 
-    const order = createP2POrder(buyer, { adId: String(ad.id), assetAmount: 10, paymentMethod: "M-Pesa" }) as Record<string, any>;
+    const order = createP2POrder(buyer, { adId: String(ad.id), assetAmount: 10, paymentMethod: "BTC" }) as Record<string, any>;
     expect(order.status).toBe("escrow_locked");
     expect(() => markP2PPaid(seller, String(order.id), "WRONG")).toThrow("Only the buyer");
 
-    markP2PPaid(buyer, String(order.id), "MPESA-1", "Paid from test");
-    expect(() => markP2PPaid(buyer, String(order.id), "MPESA-2")).toThrow("Only escrow-locked");
+    markP2PPaid(buyer, String(order.id), "BTC-TX-1", "Sent from test wallet");
+    expect(() => markP2PPaid(buyer, String(order.id), "BTC-TX-2")).toThrow("Only escrow-locked");
 
     const released = releaseP2POrder(seller, String(order.id)) as Record<string, any>;
     expect(released.status).toBe("released");
@@ -74,14 +74,30 @@ describe("P2P escrow lifecycle", () => {
       availableAmount: 20,
       minLimit: 500,
       maxLimit: 1000,
-      paymentMethods: "M-Pesa",
+      paymentMethods: "ETH",
     }) as Record<string, any>;
 
-    expect(() => createP2POrder(maker, { adId: String(ad.id), assetAmount: 5, paymentMethod: "M-Pesa" })).toThrow("own P2P ad");
-    expect(() => createP2POrder(freshUnverified, { adId: String(ad.id), assetAmount: 5, paymentMethod: "M-Pesa" })).toThrow("KYC approval");
-    expect(() => createP2POrder(taker, { adId: String(ad.id), assetAmount: 2, paymentMethod: "M-Pesa" })).toThrow("outside ad limits");
-    expect(() => createP2POrder(taker, { adId: String(ad.id), assetAmount: 6, paymentMethod: "Cash" })).toThrow("Payment method");
-    expect(() => createP2POrder(taker, { adId: "preview-1", assetAmount: 6, paymentMethod: "M-Pesa" })).toThrow("Preview ads");
+    expect(() => createP2POrder(maker, { adId: String(ad.id), assetAmount: 5, paymentMethod: "ETH" })).toThrow("own P2P ad");
+    expect(() => createP2POrder(freshUnverified, { adId: String(ad.id), assetAmount: 5, paymentMethod: "ETH" })).toThrow("KYC approval");
+    expect(() => createP2POrder(taker, { adId: String(ad.id), assetAmount: 2, paymentMethod: "ETH" })).toThrow("outside ad limits");
+    expect(() => createP2POrder(taker, { adId: String(ad.id), assetAmount: 6, paymentMethod: "M-Pesa" })).toThrow("Payment method");
+    expect(() => createP2POrder(taker, { adId: "preview-1", assetAmount: 6, paymentMethod: "ETH" })).toThrow("Preview ads");
+  });
+
+  it("rejects fiat P2P methods when publishing ads", () => {
+    const maker = createUser("fiat-method-maker");
+    seedCrypto(maker.id, "USDT", 50);
+
+    expect(() => createP2PAd(maker, {
+      side: "sell",
+      assetSymbol: "USDT",
+      fiatCurrency: "KES",
+      price: 100,
+      availableAmount: 20,
+      minLimit: 500,
+      maxLimit: 1000,
+      paymentMethods: "M-Pesa,Paystack,Card",
+    })).toThrow("Web3 payment method");
   });
 
   it("cancels unpaid buy-ad orders and unlocks the taker seller balance", () => {
@@ -97,10 +113,10 @@ describe("P2P escrow lifecycle", () => {
       availableAmount: 12,
       minLimit: 100,
       maxLimit: 5000,
-      paymentMethods: "Bank Transfer",
+      paymentMethods: "USDT",
     }) as Record<string, any>;
 
-    const order = createP2POrder(seller, { adId: String(ad.id), assetAmount: 5, paymentMethod: "Bank Transfer" }) as Record<string, any>;
+    const order = createP2POrder(seller, { adId: String(ad.id), assetAmount: 5, paymentMethod: "USDT" }) as Record<string, any>;
     expect(getCryptoBalance(seller.id, "USDT")).toMatchObject({ available: 25, locked: 5 });
 
     const cancelled = cancelP2POrder(buyer, String(order.id)) as Record<string, any>;
@@ -124,12 +140,12 @@ describe("P2P escrow lifecycle", () => {
       availableAmount: 20,
       minLimit: 100,
       maxLimit: 5000,
-      paymentMethods: "M-Pesa",
+      paymentMethods: "BTC",
     }) as Record<string, any>;
 
-    const order = createP2POrder(buyer, { adId: String(ad.id), assetAmount: 6, paymentMethod: "M-Pesa" }) as Record<string, any>;
-    markP2PPaid(buyer, String(order.id), "MPESA-DISPUTE");
-    disputeP2POrder(seller, String(order.id), "Reference not found");
+    const order = createP2POrder(buyer, { adId: String(ad.id), assetAmount: 6, paymentMethod: "BTC" }) as Record<string, any>;
+    markP2PPaid(buyer, String(order.id), "BTC-DISPUTE");
+    disputeP2POrder(seller, String(order.id), "Transaction reference not found");
 
     const resolved = resolveP2PDispute("admin-test", String(order.id), "refund_seller", "Payment not confirmed") as Record<string, any>;
     expect(resolved.status).toBe("refunded");

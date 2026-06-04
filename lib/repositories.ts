@@ -1,5 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { db, getUserById, money, type User } from "./db";
+import { defaultP2PWeb3PaymentMethods, normalizeP2PWeb3Method, parseP2PWeb3PaymentMethods } from "./p2p-methods";
 import { assets, chooseSmartDigitContract, isDirection, isForexAsset, potentialPayout, pricePrecisionForAsset, resolveDigitTrade, type Direction } from "./trading";
 
 export type Tick = {
@@ -880,7 +881,7 @@ export function getFreshUser(id: string) {
   return user;
 }
 
-const defaultPaymentMethods = "M-Pesa,Bank Transfer,Paystack,Airtel Money,Cash";
+const defaultPaymentMethods = defaultP2PWeb3PaymentMethods.join(",");
 const terminalP2PStatuses = new Set(["released", "cancelled", "expired", "refunded", "resolved_no_action"]);
 
 type P2PAdFilters = {
@@ -898,7 +899,7 @@ export function listP2PAds(sideOrFilters?: string | P2PAdFilters, asset = "USDT"
   const side = filters.side === "buy" ? "buy" : filters.side === "sell" ? "sell" : "";
   const assetSymbol = String(filters.asset ?? asset ?? "USDT").toUpperCase();
   const fiatCurrency = String(filters.fiatCurrency ?? "").toUpperCase();
-  const paymentMethod = String(filters.paymentMethod ?? "").trim();
+  const paymentMethod = normalizeP2PWeb3Method(String(filters.paymentMethod ?? ""));
   const minFiat = Number(filters.minFiat ?? 0);
   const maxFiat = Number(filters.maxFiat ?? 0);
   const sort = String(filters.sort ?? "newest");
@@ -935,7 +936,10 @@ export function listP2PAds(sideOrFilters?: string | P2PAdFilters, asset = "USDT"
     LIMIT 50
   `).all(side, side, assetSymbol, assetSymbol, fiatCurrency, fiatCurrency, paymentMethod, `%${paymentMethod}%`, minFiat, minFiat, maxFiat, maxFiat) as Array<Record<string, unknown>>;
 
-  if (rows.length > 0) return rows.map(formatP2PAd);
+  const formattedRows = rows
+    .map(formatP2PAd)
+    .filter((ad) => ad.paymentMethods.length > 0 && (!paymentMethod || ad.paymentMethods.includes(paymentMethod)));
+  if (formattedRows.length > 0) return formattedRows;
   return seedP2PPreviewAds(side, assetSymbol);
 }
 
@@ -951,8 +955,8 @@ export function createP2PAd(user: User, input: { side: string; assetSymbol: stri
   if (price <= 0) throw new Error("P2P price must be greater than zero");
   if (availableAmount <= 0) throw new Error("P2P available amount must be greater than zero");
   if (minLimit <= 0 || maxLimit < minLimit) throw new Error("Invalid P2P fiat limits");
-  const paymentMethods = parsePaymentMethods(input.paymentMethods);
-  if (paymentMethods.length === 0) throw new Error("At least one payment method is required");
+  const paymentMethods = parseP2PWeb3PaymentMethods(input.paymentMethods);
+  if (paymentMethods.length === 0) throw new Error("At least one Web3 payment method is required");
   const id = randomUUID();
   db.exec("BEGIN");
   try {
@@ -1001,8 +1005,12 @@ export function createP2POrder(user: User, input: { adId: string; assetAmount: n
   if (fiatAmount < Number(ad.min_limit ?? 0) || fiatAmount > Number(ad.max_limit ?? 0)) throw new Error("Order amount is outside ad limits");
   const assetSymbol = String(ad.asset_symbol ?? "USDT");
   const fiatCurrency = String(ad.fiat_currency ?? "KES");
-  const methods = parsePaymentMethods(String(ad.payment_methods ?? defaultPaymentMethods));
-  const paymentMethod = input.paymentMethod || methods[0] || "M-Pesa";
+  const methods = parseP2PWeb3PaymentMethods(String(ad.payment_methods ?? defaultPaymentMethods));
+  const requestedPaymentMethod = String(input.paymentMethod ?? "").trim();
+  const normalizedPaymentMethod = normalizeP2PWeb3Method(requestedPaymentMethod);
+  if (requestedPaymentMethod && !normalizedPaymentMethod) throw new Error("Payment method is not available for this ad");
+  if (methods.length === 0) throw new Error("Payment method is not available for this ad");
+  const paymentMethod = normalizedPaymentMethod || methods[0] || defaultP2PWeb3PaymentMethods[0];
   if (!methods.includes(paymentMethod)) throw new Error("Payment method is not available for this ad");
   const id = randomUUID();
 
@@ -1166,7 +1174,7 @@ function formatP2PAd(ad: Record<string, unknown>) {
   const total = Number(ad.total_orders ?? 0);
   return {
     ...ad,
-    paymentMethods: String(ad.payment_methods ?? defaultPaymentMethods).split(",").map((item) => item.trim()).filter(Boolean),
+    paymentMethods: parseP2PWeb3PaymentMethods(String(ad.payment_methods ?? defaultPaymentMethods)),
     completionRate: total > 0 ? money((completed / total) * 100) : 100,
     completedOrders: completed,
     disputeCount: Number(ad.dispute_count ?? 0),
@@ -1177,14 +1185,10 @@ function formatP2PAd(ad: Record<string, unknown>) {
 function seedP2PPreviewAds(side = "sell", asset = "USDT") {
   const chosenSide = side === "buy" ? "buy" : "sell";
   return [
-    { id: "preview-1", username: "SwiftPay KE", side: chosenSide, asset_symbol: asset || "USDT", fiat_currency: "KES", price: 132.45, available_amount: 850, min_limit: 500, max_limit: 75000, paymentMethods: ["M-Pesa", "Bank Transfer", "Paystack"], completionRate: 98.7, completedOrders: 284, disputeCount: 2, avgReleaseMinutes: 4, terms: "Preview only. Release within 5 minutes after payment proof." },
-    { id: "preview-2", username: "Nairobi Desk", side: chosenSide, asset_symbol: asset || "USDT", fiat_currency: "KES", price: 131.95, available_amount: 420, min_limit: 1000, max_limit: 50000, paymentMethods: ["Airtel Money", "Cash", "M-Pesa"], completionRate: 97.2, completedOrders: 141, disputeCount: 1, avgReleaseMinutes: 7, terms: "Preview only. Use exact reference shown in order chat." },
-    { id: "preview-3", username: "Pro Merchant", side: chosenSide, asset_symbol: asset || "USDT", fiat_currency: "KES", price: 133.1, available_amount: 1260, min_limit: 2500, max_limit: 150000, paymentMethods: ["Bank Transfer", "Paystack"], completionRate: 99.1, completedOrders: 520, disputeCount: 3, avgReleaseMinutes: 3, terms: "Preview only. Admin escrow dispute available." },
+    { id: "preview-1", username: "BTC Desk", side: chosenSide, asset_symbol: asset || "USDT", fiat_currency: "USD", price: 1, available_amount: 850, min_limit: 5, max_limit: 75000, paymentMethods: ["BTC", "ETH", "USDT"], completionRate: 98.7, completedOrders: 284, disputeCount: 2, avgReleaseMinutes: 4, terms: "Preview only. Share a wallet transaction reference before escrow release." },
+    { id: "preview-2", username: "ETH Liquidity", side: chosenSide, asset_symbol: asset || "USDT", fiat_currency: "USD", price: 1, available_amount: 420, min_limit: 10, max_limit: 50000, paymentMethods: ["ETH", "USDC", "BNB"], completionRate: 97.2, completedOrders: 141, disputeCount: 1, avgReleaseMinutes: 7, terms: "Preview only. Use exact Web3 reference shown in order chat." },
+    { id: "preview-3", username: "Web3 Merchant", side: chosenSide, asset_symbol: asset || "USDT", fiat_currency: "USD", price: 1, available_amount: 1260, min_limit: 25, max_limit: 150000, paymentMethods: ["SOL", "XRP", "DOGE"], completionRate: 99.1, completedOrders: 520, disputeCount: 3, avgReleaseMinutes: 3, terms: "Preview only. Admin escrow dispute available." },
   ];
-}
-
-function parsePaymentMethods(value: string) {
-  return value.split(",").map((item) => item.trim()).filter(Boolean);
 }
 
 function ensureCryptoBalance(userId: string, assetSymbol: string) {

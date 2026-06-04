@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { ArrowLeftRight, Ban, CheckCircle2, Filter, MessageCircle, Plus, RefreshCw, Send, ShieldCheck, Wallet } from "lucide-react";
+import { defaultP2PWeb3PaymentMethods, p2pAssets, p2pWeb3PaymentMethods } from "../lib/p2p-methods";
 import { Logo } from "./logo";
 import { PublicThemeShell } from "./public-theme-shell";
 import { PublicThemeToggle } from "./public-theme-toggle";
@@ -50,14 +51,14 @@ export function P2PApp() {
   const [notice, setNotice] = useState("");
   const [amount, setAmount] = useState(25);
   const [selectedAd, setSelectedAd] = useState<P2PAd | null>(null);
-  const [selectedPayment, setSelectedPayment] = useState("M-Pesa");
+  const [selectedPayment, setSelectedPayment] = useState(defaultP2PWeb3PaymentMethods[0]);
   const [selectedOrder, setSelectedOrder] = useState<any>(null);
   const [messages, setMessages] = useState<P2PMessage[]>([]);
   const [chatText, setChatText] = useState("");
   const [paymentReference, setPaymentReference] = useState("");
   const [proofNote, setProofNote] = useState("");
   const [disputeReason, setDisputeReason] = useState("");
-  const [form, setForm] = useState({ side: "sell", price: 132.5, availableAmount: 100, minLimit: 500, maxLimit: 50000, paymentMethods: "M-Pesa,Bank Transfer,Paystack", terms: "Fast release." });
+  const [form, setForm] = useState({ side: "sell", price: 1, availableAmount: 100, minLimit: 5, maxLimit: 50000, paymentMethods: defaultP2PWeb3PaymentMethods.join(","), terms: "Web3 settlement only. Share a tx hash or wallet reference before release." });
 
   const load = useCallback(async (currentToken: string, overrides: Partial<{ side: "buy" | "sell"; asset: string }> = {}) => {
     const nextSide = overrides.side ?? side;
@@ -169,7 +170,17 @@ export function P2PApp() {
 
   function chooseAd(ad: P2PAd) {
     setSelectedAd(ad);
-    setSelectedPayment(ad.paymentMethods?.[0] ?? "M-Pesa");
+    setSelectedPayment(ad.paymentMethods?.[0] ?? defaultP2PWeb3PaymentMethods[0]);
+  }
+
+  function toggleFormPaymentMethod(method: string) {
+    setForm((value) => {
+      const current = value.paymentMethods.split(",").map((item) => item.trim()).filter(Boolean);
+      const next = current.includes(method)
+        ? current.filter((item) => item !== method)
+        : [...current, method];
+      return { ...value, paymentMethods: next.join(",") };
+    });
   }
 
   function chooseOrder(order: any) {
@@ -204,14 +215,15 @@ export function P2PApp() {
             </div>
             <div className="grid gap-3 md:grid-cols-4 xl:grid-cols-7">
               <select className="field" value={asset} onChange={(event) => { setAsset(event.target.value); token && load(token, { asset: event.target.value }); }}>
-                <option>USDT</option>
-                <option>BTC</option>
-                <option>ETH</option>
+                {p2pAssets.map((item) => <option key={item}>{item}</option>)}
               </select>
               <select className="field" value={fiat} onChange={(event) => setFiat(event.target.value)}><option>KES</option><option>USD</option></select>
-              <select className="field" value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value)}><option value="">Any method</option><option>M-Pesa</option><option>Bank Transfer</option><option>Paystack</option><option>Airtel Money</option><option>Cash</option></select>
-              <input className="field" value={minFiat} onChange={(event) => setMinFiat(event.target.value)} placeholder="Min fiat" />
-              <input className="field" value={maxFiat} onChange={(event) => setMaxFiat(event.target.value)} placeholder="Max fiat" />
+              <select className="field" value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value)}>
+                <option value="">Any Web3</option>
+                {p2pWeb3PaymentMethods.map((method) => <option key={method}>{method}</option>)}
+              </select>
+              <input className="field" value={minFiat} onChange={(event) => setMinFiat(event.target.value)} placeholder="Min quote" />
+              <input className="field" value={maxFiat} onChange={(event) => setMaxFiat(event.target.value)} placeholder="Max quote" />
               <select className="field" value={sort} onChange={(event) => setSort(event.target.value)}><option value="newest">Newest</option><option value="price_asc">Best buy price</option><option value="price_desc">Best sell price</option></select>
               <button onClick={() => token && load(token)} className="inline-flex items-center justify-center gap-2 rounded-xl bg-white/10 px-4 py-3 font-bold"><Filter size={16} /> Apply</button>
             </div>
@@ -232,7 +244,7 @@ export function P2PApp() {
                       <div><div className="text-gray-500">Price</div><div className="text-2xl font-black">{ad.fiat_currency} {Number(ad.price).toFixed(2)}</div></div>
                       <div><div className="text-gray-500">Avail.</div><div className="font-bold">{Number(ad.available_amount).toFixed(2)} {ad.asset_symbol}</div></div>
                       <div><div className="text-gray-500">Limits</div><div className="font-bold">{ad.fiat_currency} {Number(ad.min_limit).toFixed(0)} - {Number(ad.max_limit).toFixed(0)}</div></div>
-                      <div><div className="text-gray-500">Pay</div><div className="font-bold">{(ad.paymentMethods ?? []).join(", ")}</div></div>
+                      <div><div className="text-gray-500">Web3</div><div className="font-bold">{(ad.paymentMethods ?? []).join(", ")}</div></div>
                       <div><div className="text-gray-500">Stats</div><div className="font-bold">{ad.completedOrders ?? 0} / {ad.disputeCount ?? 0}</div></div>
                     </div>
                   </div>
@@ -254,7 +266,7 @@ export function P2PApp() {
                 </div>
                 <input className="field" type="number" value={amount} onChange={(event) => setAmount(Number(event.target.value))} />
                 <select className="field" value={selectedPayment} onChange={(event) => setSelectedPayment(event.target.value)}>
-                  {(selectedAd.paymentMethods ?? ["M-Pesa"]).map((method) => <option key={method}>{method}</option>)}
+                  {(selectedAd.paymentMethods ?? defaultP2PWeb3PaymentMethods).map((method) => <option key={method}>{method}</option>)}
                 </select>
                 <div className="rounded-xl bg-white/5 p-3 text-sm">
                   <div className="text-gray-500">Total</div>
@@ -276,10 +288,27 @@ export function P2PApp() {
               <input className="field" type="number" value={form.price} onChange={(event) => setForm((value) => ({ ...value, price: Number(event.target.value) }))} placeholder="Price" />
               <input className="field" type="number" value={form.availableAmount} onChange={(event) => setForm((value) => ({ ...value, availableAmount: Number(event.target.value) }))} placeholder="Available" />
               <div className="grid grid-cols-2 gap-2">
-                <input className="field" type="number" value={form.minLimit} onChange={(event) => setForm((value) => ({ ...value, minLimit: Number(event.target.value) }))} placeholder="Min fiat" />
-                <input className="field" type="number" value={form.maxLimit} onChange={(event) => setForm((value) => ({ ...value, maxLimit: Number(event.target.value) }))} placeholder="Max fiat" />
+                <input className="field" type="number" value={form.minLimit} onChange={(event) => setForm((value) => ({ ...value, minLimit: Number(event.target.value) }))} placeholder="Min quote" />
+                <input className="field" type="number" value={form.maxLimit} onChange={(event) => setForm((value) => ({ ...value, maxLimit: Number(event.target.value) }))} placeholder="Max quote" />
               </div>
-              <input className="field" value={form.paymentMethods} onChange={(event) => setForm((value) => ({ ...value, paymentMethods: event.target.value }))} placeholder="Methods" />
+              <div className="rounded-xl border border-white/10 bg-black/15 p-2">
+                <div className="mb-2 text-[10px] font-black uppercase tracking-wide text-gray-500">Web3 settlement</div>
+                <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-5">
+                  {p2pWeb3PaymentMethods.map((method) => {
+                    const selected = form.paymentMethods.split(",").map((item) => item.trim()).includes(method);
+                    return (
+                      <button
+                        key={method}
+                        type="button"
+                        onClick={() => toggleFormPaymentMethod(method)}
+                        className={`min-h-9 rounded-lg border px-2 text-xs font-black ${selected ? "border-brand bg-brand text-ink" : "border-white/10 bg-white/5 text-gray-300 hover:bg-white/10"}`}
+                      >
+                        {method}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
               <textarea className="field min-h-16" value={form.terms} onChange={(event) => setForm((value) => ({ ...value, terms: event.target.value }))} placeholder="Terms" />
               <button onClick={createAd} className="rounded-xl bg-brand px-4 py-3 font-black">Publish</button>
             </div>
@@ -309,9 +338,9 @@ export function P2PApp() {
               <div className="grid gap-2">
                 {currentUserId === selectedOrder.buyer_id && selectedOrder.status === "escrow_locked" && (
                   <>
-                    <input className="field" value={paymentReference} onChange={(event) => setPaymentReference(event.target.value)} placeholder="Reference" />
-                    <input className="field" value={proofNote} onChange={(event) => setProofNote(event.target.value)} placeholder="Proof" />
-                    <button onClick={() => action(selectedOrder.id, "pay")} className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-500 px-3 py-2 font-bold text-ink"><CheckCircle2 size={16} /> Paid</button>
+                    <input className="field" value={paymentReference} onChange={(event) => setPaymentReference(event.target.value)} placeholder="Tx hash or wallet reference" />
+                    <input className="field" value={proofNote} onChange={(event) => setProofNote(event.target.value)} placeholder="Network or proof note" />
+                    <button onClick={() => action(selectedOrder.id, "pay")} className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-500 px-3 py-2 font-bold text-ink"><CheckCircle2 size={16} /> Sent</button>
                   </>
                 )}
                 {currentUserId === selectedOrder.seller_id && selectedOrder.status === "payment_sent" && <button onClick={() => action(selectedOrder.id, "release")} className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-500/20 px-3 py-2 font-bold text-emerald-300"><CheckCircle2 size={16} /> Release</button>}

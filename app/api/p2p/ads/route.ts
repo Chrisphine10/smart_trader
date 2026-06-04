@@ -1,5 +1,6 @@
 import type { NextRequest } from "next/server";
 import { currentUser, handleRoute, json, readBody } from "../../../../lib/http";
+import { defaultP2PWeb3PaymentMethods } from "../../../../lib/p2p-methods";
 import { createP2PAd, listP2PAds } from "../../../../lib/repositories";
 
 export const runtime = "nodejs";
@@ -31,7 +32,7 @@ export async function POST(request: NextRequest) {
       availableAmount: Number(body.availableAmount ?? 100),
       minLimit: Number(body.minLimit ?? 500),
       maxLimit: Number(body.maxLimit ?? 50000),
-      paymentMethods: String(body.paymentMethods ?? "M-Pesa,Bank Transfer,Paystack"),
+      paymentMethods: String(body.paymentMethods ?? defaultP2PWeb3PaymentMethods.join(",")),
       terms: body.terms ? String(body.terms) : undefined,
     }) }, 201);
   });
