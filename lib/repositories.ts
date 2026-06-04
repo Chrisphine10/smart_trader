@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { db, getUserById, money, type User } from "./db";
-import { assets, chooseSmartDigitContract, isDirection, isForexAsset, potentialPayout, resolveDigitTrade, type Direction } from "./trading";
+import { assets, chooseSmartDigitContract, isDirection, isForexAsset, potentialPayout, pricePrecisionForAsset, resolveDigitTrade, type Direction } from "./trading";
 
 export type Tick = {
   asset: string;
@@ -145,6 +145,7 @@ export function settleOpenPositions(userId: string, asset: string, tick: Tick) {
     const direction = String(row.direction) as Direction;
     const selectedDigit = Number(row.selected_digit ?? 5);
     const isPriceContract = ["forex", "futures"].includes(String(row.trade_type));
+    const exitPriceLabel = tick.price.toFixed(pricePrecisionForAsset(asset));
     const won = isPriceContract
       ? direction === "over" ? tick.price > Number(row.entry_price ?? tick.price) : tick.price < Number(row.entry_price ?? tick.price)
       : resolveDigitTrade(direction, selectedDigit, tick.lastDigit);
@@ -177,7 +178,7 @@ export function settleOpenPositions(userId: string, asset: string, tick: Tick) {
         won ? grossPayout : 0,
         won && escrowFee > 0 ? balanceAfterGrossPayout : balanceAfter,
         isPriceContract
-          ? won ? `Forex ${direction === "over" ? "BUY" : "SELL"} closed in profit at ${tick.price.toFixed(5)}` : `Forex ${direction === "over" ? "BUY" : "SELL"} closed at a loss at ${tick.price.toFixed(5)}`
+          ? won ? `Forex ${direction === "over" ? "BUY" : "SELL"} closed in profit at ${exitPriceLabel}` : `Forex ${direction === "over" ? "BUY" : "SELL"} closed at a loss at ${exitPriceLabel}`
           : won ? `Won on ${asset} - ${direction.toUpperCase()} at digit ${tick.lastDigit}` : `Lost on ${asset} - ${direction.toUpperCase()} at digit ${tick.lastDigit}`,
         asset,
         direction,

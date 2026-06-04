@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { db } from "./db";
-import { assets, isForexAsset } from "./trading";
+import { assets, isForexAsset, pricePrecisionForAsset } from "./trading";
 import type { Tick } from "./repositories";
 
 type Listener = (tick: Tick) => void;
@@ -48,8 +48,8 @@ class SyntheticMarket {
     const microMove = (Math.random() - 0.5) * profile.microNoise;
     const regimeShift = Math.random() < profile.regimeChance ? (Math.random() - 0.5) * profile.volatility * 0.8 : 0;
     const nextTrend = oldTrend * profile.persistence + volatilityShock * 0.18 + regimeShift;
-    const precision = isForexAsset(asset) && !asset.includes("jpy") ? 100000 : 100;
-    const minPrice = isForexAsset(asset) ? 0.0001 : 100;
+    const precision = 10 ** pricePrecisionForAsset(asset);
+    const minPrice = isForexAsset(asset) ? asset === "xau_usd" ? 100 : 0.0001 : 100;
     const price = Math.max(minPrice, Math.round((previous + nextTrend + meanReversion + microMove) * precision) / precision);
     const sequence = (this.sequence.get(asset) ?? 0) + 1;
     const lastDigit = Number(String(price.toFixed(2)).replace(".", "").slice(-1));
@@ -89,13 +89,14 @@ class SyntheticMarket {
 }
 
 function marketProfile(asset: string) {
-  const forexAnchors: Record<string, { anchor: number; volatility: number }> = {
+  const forexAnchors: Record<string, { anchor: number; volatility: number; displayVolatility?: number }> = {
     eur_usd: { anchor: 1.085, volatility: 0.0018 },
     gbp_usd: { anchor: 1.272, volatility: 0.0022 },
     usd_jpy: { anchor: 156.4, volatility: 0.18 },
     aud_usd: { anchor: 0.664, volatility: 0.0016 },
     usd_cad: { anchor: 1.366, volatility: 0.0017 },
     usd_chf: { anchor: 0.912, volatility: 0.0015 },
+    xau_usd: { anchor: 2365, volatility: 2.8, displayVolatility: 2.8 },
   };
   const forex = forexAnchors[asset];
   if (forex) {
@@ -106,7 +107,7 @@ function marketProfile(asset: string) {
       persistence: 0.74,
       reversion: 0.008,
       regimeChance: 0.02,
-      displayVolatility: Math.round(forex.volatility * 100000) / 10,
+      displayVolatility: forex.displayVolatility ?? Math.round(forex.volatility * 100000) / 10,
     };
   }
 

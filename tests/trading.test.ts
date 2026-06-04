@@ -1,8 +1,9 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { config } from "../lib/config";
 import { db, hashPassword, migrate, referralCode, seedAdmin, trc20Address, verifyPassword, type User } from "../lib/db";
+import { market } from "../lib/market";
 import { calculateEscrowSplit, createManualTrade, maybeCreateAutoTrade, settleOpenPositions, startAutoSession } from "../lib/repositories";
-import { chooseSmartDigitContract, payoutMultiplier, potentialPayout, resolveDigitTrade, type Direction } from "../lib/trading";
+import { assets, chooseSmartDigitContract, forexAssets, isForexAsset, payoutMultiplier, potentialPayout, pricePrecisionForAsset, resolveDigitTrade, type Direction } from "../lib/trading";
 
 function createTradingUser(label: string): User {
   const id = crypto.randomUUID();
@@ -289,5 +290,78 @@ describe("trading math", () => {
     expect(position.direction).toBe("over");
     expect(position.potential_payout).toBe(170);
     expect(position.ticks).toBe(30);
+  });
+
+  it("lists XAU/USD as a forex-style market with 2-decimal pricing", () => {
+    expect(assets).toContain("xau_usd");
+    expect(forexAssets).toContain("xau_usd");
+    expect(isForexAsset("xau_usd")).toBe(true);
+    expect(pricePrecisionForAsset("xau_usd")).toBe(2);
+    expect(pricePrecisionForAsset("usd_jpy")).toBe(3);
+    expect(pricePrecisionForAsset("eur_usd")).toBe(5);
+
+    const tick = market.current("xau_usd");
+    const decimalPlaces = String(tick.price).split(".")[1]?.length ?? 0;
+
+    expect(tick.asset).toBe("xau_usd");
+    expect(tick.price).toBeGreaterThan(1000);
+    expect(decimalPlaces).toBeLessThanOrEqual(2);
+  });
+
+  it("supports XAU/USD manual Buy and Sell price contracts", () => {
+    const user = createTradingUser("xau-manual");
+    const position = createManualTrade(user, {
+      asset: "xau_usd",
+      direction: "over",
+      stake: 10,
+      isDemo: false,
+      contractMode: "forex",
+      leverage: 10,
+      durationTicks: 12,
+    }, {
+      asset: "xau_usd",
+      price: 2365.25,
+      lastDigit: 5,
+      sequence: 1,
+      timestamp: new Date(2026, 0, 1, 0, 0, 0).toISOString(),
+      movement: 1.2,
+    }) as Record<string, unknown>;
+
+    expect(position.asset).toBe("xau_usd");
+    expect(position.trade_type).toBe("forex");
+    expect(position.direction).toBe("over");
+    expect(position.potential_payout).toBe(90);
+    expect(position.ticks).toBe(12);
+  });
+
+  it("supports XAU/USD auto trading sessions", () => {
+    const user = createTradingUser("xau-auto");
+    const session = startAutoSession(user, {
+      asset: "xau_usd",
+      direction: "under",
+      stake: 10,
+      isDemo: false,
+      contractMode: "forex",
+      leverage: 10,
+      strategy: "forex_trend",
+      durationTicks: 20,
+    });
+
+    expect(session).toMatchObject({ active: true, asset: "xau_usd", direction: "under", tradeType: "forex", leverage: 10 });
+
+    const position = maybeCreateAutoTrade(user.id, {
+      asset: "xau_usd",
+      price: 2364.8,
+      lastDigit: 8,
+      sequence: 1,
+      timestamp: new Date(2026, 0, 1, 0, 0, 0).toISOString(),
+      movement: -1.1,
+    }) as Record<string, unknown>;
+
+    expect(position.asset).toBe("xau_usd");
+    expect(position.trade_type).toBe("forex");
+    expect(position.direction).toBe("under");
+    expect(position.potential_payout).toBe(90);
+    expect(position.ticks).toBe(20);
   });
 });

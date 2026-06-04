@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AlertTriangle, ArrowDown, ArrowLeftRight, ArrowUp, Banknote, Bell, Bot, ChevronDown, CircleUserRound, Copy, CreditCard, Grid3X3, Loader2, LogOut, Minus, Moon, Plus, Smartphone, Sun, Target, TrendingUp, Volume2, VolumeX, Wallet } from "lucide-react";
 import { buildTimeframeHistory, chartTimeframes, timeframeBucketSize, type ChartTimeframe } from "../lib/chart-timeframes";
-import { assets, assetLabel, forexAssets, isForexAsset, payoutMultiplier, potentialPayout, type Direction } from "../lib/trading";
+import { assets, assetLabel, forexAssets, isForexAsset, payoutMultiplier, potentialPayout, pricePrecisionForAsset, type Direction } from "../lib/trading";
 import { Logo } from "./logo";
 
 type User = {
@@ -532,11 +532,19 @@ export function TradeApp() {
     redirectToTradeLogin();
   }, [redirectToTradeLogin]);
 
-  const openDepositPrompt = useCallback((reason?: string) => {
+  const openDepositDrawer = useCallback((reason?: string) => {
+    if (user?.is_demo) {
+      requireRealLogin();
+      return;
+    }
     setWalletSection("deposit");
     setWalletOpen(true);
-    setMessage(reason ?? "Add funds to your real account before placing this trade.");
-  }, []);
+    if (reason) setMessage(reason);
+  }, [requireRealLogin, user?.is_demo]);
+
+  const openDepositPrompt = useCallback((reason?: string) => {
+    openDepositDrawer(reason ?? "Add funds to your real account before placing this trade.");
+  }, [openDepositDrawer]);
 
   const load = useCallback(async (currentToken: string, modeOverride?: boolean) => {
     const headers = { Authorization: `Bearer ${currentToken}` };
@@ -907,8 +915,7 @@ export function TradeApp() {
     }
     if (tab === "Wallet") {
       setActiveWorkspace(tab);
-      setWalletSection("deposit");
-      setWalletOpen(true);
+      openDepositDrawer();
       return;
     }
     if (tab === "Bot") {
@@ -1174,7 +1181,7 @@ export function TradeApp() {
   const positionsSummary = `${openPositions.length} open - ${completedPositions.length} closed`;
   const compactBalanceLabel = `$${Number(user?.active_balance ?? 0).toLocaleString(undefined, { notation: "compact", maximumFractionDigits: 1 })}`;
   const isAutoStoppedMessage = message.toLowerCase().startsWith("auto-trading stopped");
-  const pricePrecision = isForexAsset(asset) ? asset.includes("jpy") ? 3 : 5 : 2;
+  const pricePrecision = pricePrecisionForAsset(asset);
   const formatActivePrice = (value: number | undefined) => typeof value === "number" ? value.toFixed(pricePrecision) : "-";
   const tradeButtonLabel = (label: string, direction: Direction) => {
     if (pendingTradeAction?.direction === direction) {
@@ -1219,7 +1226,7 @@ export function TradeApp() {
               {isForexMode ? <Grid3X3 size={15} /> : <TrendingUp size={15} />}
               <span className="hidden min-[900px]:inline">{marketToggleLabel}</span>
             </button>
-            <button aria-label="Open wallet" onClick={() => { setWalletSection("deposit"); setWalletOpen(true); }} className="inline-flex h-9 min-w-[64px] shrink-0 items-center justify-center gap-1 rounded-lg bg-white/5 px-2 text-xs font-bold hover:bg-white/10 min-[900px]:h-10 min-[900px]:min-w-[112px] min-[900px]:gap-1.5 min-[900px]:px-3"><Wallet size={15} /><span className="min-[900px]:hidden">{compactBalanceLabel}</span><span className="hidden min-[900px]:inline">${Number(user.active_balance).toFixed(2)}</span></button>
+            <button aria-label="Open wallet" onClick={() => openDepositDrawer()} className="inline-flex h-9 min-w-[64px] shrink-0 items-center justify-center gap-1 rounded-lg bg-white/5 px-2 text-xs font-bold hover:bg-white/10 min-[900px]:h-10 min-[900px]:min-w-[112px] min-[900px]:gap-1.5 min-[900px]:px-3"><Wallet size={15} /><span className="min-[900px]:hidden">{compactBalanceLabel}</span><span className="hidden min-[900px]:inline">${Number(user.active_balance).toFixed(2)}</span></button>
             <button
               aria-label={`Switch to ${themeMode === "light" ? "dark" : "light"} theme`}
               title={`Switch to ${themeMode === "light" ? "dark" : "light"} theme`}
@@ -1361,7 +1368,7 @@ export function TradeApp() {
                 </span>
                 <ChevronDown size={15} className="shrink-0 text-gray-400" />
               </button>
-              <button onClick={() => { setWalletSection("deposit"); setWalletOpen(true); }} className="h-9 rounded-xl bg-brand px-3 text-sm font-black text-ink shadow-lg shadow-brand/20">Deposit</button>
+              <button onClick={() => openDepositDrawer()} className="h-9 rounded-xl bg-brand px-3 text-sm font-black text-ink shadow-lg shadow-brand/20">Deposit</button>
               <button aria-label="Open notifications" onClick={() => setChatOpen(true)} className="grid h-9 w-9 place-items-center rounded-full border border-white/10 bg-white/5 text-gray-300 hover:bg-white/10"><Bell size={18} /></button>
               <button aria-label="Open profile" onClick={() => { location.href = "/settings"; }} className="grid h-9 w-9 place-items-center rounded-full border border-white/10 bg-white/5 text-gray-300 hover:bg-white/10"><CircleUserRound size={19} /></button>
             </div>
@@ -1649,6 +1656,31 @@ export function TradeApp() {
       {mobilePanel === "trade" && (
         <MobileSheet title="Trade mode" onClose={() => setMobilePanel(null)}>
           <div className="grid gap-2">
+            <div>
+              <div className="mb-1 text-[10px] font-black uppercase tracking-wide text-gray-500">Account</div>
+              <div className="grid grid-cols-2 overflow-hidden rounded-lg border border-white/10 bg-black/15 p-0.5 text-xs font-black uppercase">
+                <button onClick={() => switchAccount(true)} className={`min-h-10 rounded-md px-3 py-2 ${user.is_demo ? "bg-brand text-ink" : "text-gray-300"}`}>Demo</button>
+                <button onClick={() => switchAccount(false)} className={`min-h-10 rounded-md px-3 py-2 ${!user.is_demo ? "bg-brand text-ink" : "text-gray-300"}`}>Real</button>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setMobilePanel(null);
+                setAiOpen(true);
+              }}
+              className="flex min-h-11 items-center justify-between gap-3 rounded-lg border border-brand/25 bg-brand/10 px-3 py-2 text-left text-brand hover:bg-brand/15"
+            >
+              <span className="flex min-w-0 items-center gap-2">
+                <Bot size={16} className="shrink-0" />
+                <span className="min-w-0">
+                  <span className="block truncate text-xs font-black uppercase tracking-wide">AI Auto Setup</span>
+                  <span className="block truncate text-[11px] font-semibold text-gray-400">Scan markets and load auto trade settings</span>
+                </span>
+              </span>
+              <ChevronDown size={15} className="-rotate-90 shrink-0 text-brand" />
+            </button>
+            <div className="text-[10px] font-black uppercase tracking-wide text-gray-500">Mode</div>
             <div className="grid grid-cols-2 overflow-hidden rounded-lg border border-white/10 bg-black/15 p-0.5 text-xs font-black uppercase">
               <button onClick={() => selectTradeMode("auto")} className={`min-h-10 rounded-md px-3 py-2 ${mode === "auto" ? "bg-brand text-ink" : "text-gray-300"}`}>Auto</button>
               <button onClick={() => selectTradeMode("manual")} className={`min-h-10 rounded-md px-3 py-2 ${mode === "manual" ? "bg-brand text-ink" : "text-gray-300"}`}>Manual</button>
@@ -1773,12 +1805,12 @@ function MobileSheet({ title, onClose, children }: { title: string; onClose: () 
 
 function DigitPanel({ tick, selectedDigit, digitStats, digitMeasures }: { tick: Tick | null; selectedDigit: number; digitStats: DigitStat[]; digitMeasures: DigitMeasures }) {
   return (
-    <div className="rounded-lg border border-white/10 bg-[#0f141d] p-2 min-[600px]:shrink-0 min-[600px]:p-2 sm:p-3 xl:p-4">
-      <div className="mb-2 flex items-center justify-between gap-3 min-[600px]:mb-2">
+    <div className="rounded-lg border border-white/10 bg-[#0f141d] p-1.5 min-[600px]:shrink-0 min-[900px]:p-3 xl:p-4" aria-label="Digit distribution">
+      <div className="mb-2 hidden items-center justify-between gap-3 min-[900px]:flex">
         <h2 className="text-sm font-black min-[600px]:text-base">Digits</h2>
         <span className="text-xs font-semibold text-gray-500">D{selectedDigit}</span>
       </div>
-      <div className="mb-2 grid grid-cols-6 gap-1 text-center text-[9px] min-[600px]:grid-cols-6 min-[600px]:text-[10px]">
+      <div className="mb-2 hidden grid-cols-6 gap-1 text-center text-[9px] min-[900px]:grid min-[900px]:text-[10px]">
         {[
           ["Now", tick?.lastDigit !== undefined ? `D${tick.lastDigit}` : "-"],
           ["Hot", `D${digitMeasures.hot.digit} ${digitMeasures.hot.percentage.toFixed(0)}%`],
@@ -1793,7 +1825,7 @@ function DigitPanel({ tick, selectedDigit, digitStats, digitMeasures }: { tick: 
           </div>
         ))}
       </div>
-      <div className="grid grid-cols-10 gap-1">
+      <div className="mx-auto grid w-full max-w-[440px] grid-cols-10 gap-0.5 min-[360px]:gap-1 min-[900px]:max-w-none">
         {digitStats.map(({ digit, count, percentage }) => {
           const isCurrentDigit = tick?.lastDigit === digit;
           const isHotDigit = digitMeasures.hot.digit === digit && digitMeasures.total > 0;
@@ -1802,18 +1834,18 @@ function DigitPanel({ tick, selectedDigit, digitStats, digitMeasures }: { tick: 
             <div
               key={digit}
               aria-label={`Digit ${digit}: ${percentage.toFixed(1)} percent, ${count} samples`}
-              className={`relative grid aspect-square min-h-8 place-items-center overflow-hidden rounded-full border p-0.5 text-center min-[600px]:min-h-11 min-[600px]:p-1 ${isCurrentDigit ? "border-brand bg-brand/20 ring-2 ring-brand" : isHotDigit ? "border-emerald-400/50 bg-emerald-400/10" : isColdDigit ? "border-rose-400/50 bg-rose-400/10" : "border-white/10 bg-white/5"}`}
+              className={`relative grid aspect-square min-h-6 place-items-center overflow-hidden rounded-full border text-center min-[390px]:min-h-7 min-[900px]:min-h-11 min-[900px]:p-1 ${isCurrentDigit ? "border-brand bg-brand/20 ring-1 ring-brand min-[900px]:ring-2" : isHotDigit ? "border-emerald-400/50 bg-emerald-400/10" : isColdDigit ? "border-rose-400/50 bg-rose-400/10" : "border-white/10 bg-white/5"}`}
             >
               <span className="relative z-[1] block leading-none">
-                <span className="block text-sm font-black min-[600px]:text-base">{digit}</span>
-                <span className="mt-0.5 block text-[8px] font-bold text-gray-400 min-[600px]:text-[10px]">{count ? `${percentage.toFixed(0)}%` : "-"}</span>
-                <span className="hidden text-[9px] font-bold text-gray-500 min-[600px]:block">{count}</span>
+                <span className="block text-xs font-black min-[390px]:text-sm min-[900px]:text-base">{digit}</span>
+                <span className="mt-0.5 hidden text-[10px] font-bold text-gray-400 min-[900px]:block">{count ? `${percentage.toFixed(0)}%` : "-"}</span>
+                <span className="hidden text-[9px] font-bold text-gray-500 min-[900px]:block">{count}</span>
               </span>
             </div>
           );
         })}
       </div>
-      <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2 text-[10px] font-semibold text-gray-500 min-[600px]:mt-2">
+      <div className="mt-2 hidden flex-wrap items-center justify-between gap-2 text-[10px] font-semibold text-gray-500 min-[900px]:flex">
         <span>n {digitMeasures.total}</span>
         <span>&lt;{selectedDigit}: {digitMeasures.belowShare.toFixed(0)}%</span>
         <span>D{selectedDigit}</span>

@@ -150,9 +150,10 @@ export const assets = [
   "aud_usd",
   "usd_cad",
   "usd_chf",
+  "xau_usd",
 ];
 
-export const forexAssets = ["eur_usd", "gbp_usd", "usd_jpy", "aud_usd", "usd_cad", "usd_chf"];
+export const forexAssets = ["eur_usd", "gbp_usd", "usd_jpy", "aud_usd", "usd_cad", "usd_chf", "xau_usd"];
 
 export function isForexAsset(asset: string) {
   return forexAssets.includes(asset);
@@ -161,4 +162,11 @@ export function isForexAsset(asset: string) {
 export function assetLabel(asset: string) {
   if (isForexAsset(asset)) return asset.replace("_", "/").toUpperCase();
   return asset.replaceAll("_", " ").replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+export function pricePrecisionForAsset(asset: string) {
+  if (!isForexAsset(asset)) return 2;
+  if (asset === "xau_usd") return 2;
+  if (asset.includes("jpy")) return 3;
+  return 5;
 }
