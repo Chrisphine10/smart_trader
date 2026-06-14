@@ -14,6 +14,7 @@ type User = {
   real_balance: number;
   demo_balance: number;
   is_demo: boolean;
+  is_temporary_demo?: boolean;
   active_balance: number;
   mpesa_phone?: string | null;
   mpesa_phone_verified?: boolean;
@@ -787,7 +788,7 @@ export function TradeApp() {
       if (!isDemo) redirectToTradeLogin();
       return;
     }
-    if (!isDemo && user?.is_demo) {
+    if (!isDemo && user?.is_temporary_demo) {
       requireRealLogin();
       return;
     }
@@ -1177,7 +1178,8 @@ export function TradeApp() {
   const sessionTargetLoss = Number(autoSession?.targetLoss ?? targetLoss);
   const sessionDetailLabel = showAutoSessionCard ? "Target" : "Closed";
   const sessionDetailValue = showAutoSessionCard ? `P ${moneyLabel(sessionTargetProfit)} / L ${moneyLabel(sessionTargetLoss)}` : String(manualClosedCount);
-  const tradeModeSummary = `${mode === "auto" ? "Auto" : "Manual"} - ${contractGroupLabel}`;
+  const accountModeLabel = user?.is_demo ? "Demo" : "Real";
+  const tradeModeSummary = `${accountModeLabel} - ${mode === "auto" ? "Auto" : "Manual"} - ${contractGroupLabel}`;
   const positionsSummary = `${openPositions.length} open - ${completedPositions.length} closed`;
   const compactBalanceLabel = `$${Number(user?.active_balance ?? 0).toLocaleString(undefined, { notation: "compact", maximumFractionDigits: 1 })}`;
   const isAutoStoppedMessage = message.toLowerCase().startsWith("auto-trading stopped");
@@ -1203,8 +1205,8 @@ export function TradeApp() {
   }
 
   return (
-    <main className="trade-theme min-h-screen overflow-x-hidden bg-[#0b0f16] text-white min-[900px]:flex min-[900px]:h-screen min-[900px]:flex-col min-[900px]:overflow-hidden" data-theme={themeMode}>
-      <header className="sticky top-0 z-30 border-b border-white/10 bg-[#0b0f16]/95 backdrop-blur min-[900px]:shrink-0">
+    <main className="trade-theme flex h-dvh flex-col overflow-hidden bg-[#0b0f16] text-white min-[900px]:flex min-[900px]:h-screen min-[900px]:flex-col" data-theme={themeMode}>
+      <header className="shrink-0 z-30 border-b border-white/10 bg-[#0b0f16]/95 backdrop-blur">
         <div className="mx-auto flex max-w-[1500px] items-center justify-between gap-1 px-2 py-1.5 sm:gap-2 sm:px-4 sm:py-2">
           <div className="relative min-w-0">
             <Logo size="sm" hideLabelOnMobile />
@@ -1226,7 +1228,7 @@ export function TradeApp() {
               {isForexMode ? <Grid3X3 size={15} /> : <TrendingUp size={15} />}
               <span className="hidden min-[900px]:inline">{marketToggleLabel}</span>
             </button>
-            <button aria-label="Open wallet" onClick={() => openDepositDrawer()} className="inline-flex h-9 min-w-[64px] shrink-0 items-center justify-center gap-1 rounded-lg bg-white/5 px-2 text-xs font-bold hover:bg-white/10 min-[900px]:h-10 min-[900px]:min-w-[112px] min-[900px]:gap-1.5 min-[900px]:px-3"><Wallet size={15} /><span className="min-[900px]:hidden">{compactBalanceLabel}</span><span className="hidden min-[900px]:inline">${Number(user.active_balance).toFixed(2)}</span></button>
+            <button aria-label="Open wallet" onClick={() => openDepositDrawer()} className="hidden h-9 min-w-[64px] shrink-0 items-center justify-center gap-1 rounded-lg bg-white/5 px-2 text-xs font-bold hover:bg-white/10 min-[900px]:inline-flex min-[900px]:h-10 min-[900px]:min-w-[112px] min-[900px]:gap-1.5 min-[900px]:px-3"><Wallet size={15} /><span>${Number(user.active_balance).toFixed(2)}</span></button>
             <button
               aria-label={`Switch to ${themeMode === "light" ? "dark" : "light"} theme`}
               title={`Switch to ${themeMode === "light" ? "dark" : "light"} theme`}
@@ -1250,19 +1252,45 @@ export function TradeApp() {
             <button aria-label="Log out" onClick={() => { localStorage.removeItem("token"); location.href = "/login"; }} className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg hover:bg-white/5 min-[900px]:h-10 min-[900px]:w-10"><LogOut size={17} /></button>
           </div>
         </div>
+        <div className="border-t border-white/5 px-2 pb-1.5 pt-1 min-[900px]:hidden">
+          <div className="mx-auto grid max-w-[1500px] grid-cols-[minmax(0,1fr)_auto] items-center gap-2">
+            <div className="grid grid-cols-2 overflow-hidden rounded-lg border border-white/10 bg-white/5 p-0.5 text-xs font-black uppercase">
+              <button
+                type="button"
+                aria-pressed={user.is_demo}
+                onClick={() => switchAccount(true)}
+                className={`min-h-8 rounded-md px-2 py-1 ${user.is_demo ? "bg-brand text-ink" : "text-gray-300 hover:bg-white/5"}`}
+              >
+                Demo
+              </button>
+              <button
+                type="button"
+                aria-pressed={!user.is_demo}
+                onClick={() => switchAccount(false)}
+                className={`min-h-8 rounded-md px-2 py-1 ${!user.is_demo ? "bg-brand text-ink" : "text-gray-300 hover:bg-white/5"}`}
+              >
+                Real
+              </button>
+            </div>
+            <button onClick={() => openDepositDrawer()} className="inline-flex min-h-8 shrink-0 items-center gap-1.5 rounded-lg bg-white/5 px-3 text-xs font-black text-white hover:bg-white/10">
+              <Wallet size={15} />
+              <span>{compactBalanceLabel}</span>
+            </button>
+          </div>
+        </div>
       </header>
 
-      <div className="mx-auto grid w-full max-w-[1500px] grid-cols-1 gap-2 p-2 sm:gap-3 sm:p-3 min-[900px]:min-h-0 min-[900px]:flex-1 min-[900px]:grid-cols-[180px_minmax(0,1fr)_330px] min-[900px]:items-stretch min-[900px]:gap-1 min-[900px]:overflow-hidden min-[900px]:p-2 xl:grid-cols-[260px_minmax(0,1fr)_420px] xl:items-stretch 2xl:grid-cols-[300px_minmax(0,1fr)_440px]">
-        <section className="order-1 min-w-0 space-y-2 min-[900px]:order-2 min-[900px]:flex min-[900px]:h-full min-[900px]:flex-col min-[900px]:gap-2 min-[900px]:space-y-0 min-[900px]:overflow-hidden xl:col-start-2 xl:row-start-1">
+      <div className="mx-auto grid w-full max-w-[1500px] min-h-0 flex-1 grid-cols-1 gap-1.5 overflow-y-auto p-1.5 min-[900px]:min-h-0 min-[900px]:flex-1 min-[900px]:grid-cols-[180px_minmax(0,1fr)_330px] min-[900px]:items-stretch min-[900px]:gap-1 min-[900px]:overflow-hidden min-[900px]:p-2 xl:grid-cols-[260px_minmax(0,1fr)_420px] xl:items-stretch 2xl:grid-cols-[300px_minmax(0,1fr)_440px]">
+        <section className="order-1 min-w-0 space-y-1.5 min-[900px]:order-2 min-[900px]:flex min-[900px]:h-full min-[900px]:flex-col min-[900px]:gap-2 min-[900px]:space-y-0 min-[900px]:overflow-hidden xl:col-start-2 xl:row-start-1">
           <div className="overflow-hidden rounded-lg border border-white/10 bg-[#0f141d] min-[900px]:flex min-[900px]:min-h-0 min-[900px]:flex-1 min-[900px]:flex-col">
-            <div className="border-b border-white/10 p-2 min-[600px]:p-2 sm:p-4">
-              <div className="grid gap-2 min-[600px]:gap-3 min-[900px]:grid-cols-[minmax(0,1fr)_minmax(190px,240px)] min-[900px]:items-start">
+            <div className="border-b border-white/10 p-1.5 min-[600px]:p-2 sm:p-4">
+              <div className="grid gap-1.5 min-[600px]:gap-3 min-[900px]:grid-cols-[minmax(0,1fr)_minmax(190px,240px)] min-[900px]:items-start">
                 <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h1 className="min-w-0 text-base font-black min-[600px]:text-xl sm:text-2xl">{assetLabel(asset)}</h1>
-                    <span className="rounded-md bg-brand/15 px-2 py-1 text-xs font-bold text-brand">{isForexMode ? "Forex" : mode === "auto" ? "Bot" : "Spot"}</span>
+                  <div className="flex flex-wrap items-center gap-1.5 min-[600px]:gap-2">
+                    <h1 className="min-w-0 text-sm font-black min-[600px]:text-xl sm:text-2xl">{assetLabel(asset)}</h1>
+                    <span className="rounded-md bg-brand/15 px-1.5 py-0.5 text-[10px] font-bold text-brand min-[600px]:px-2 min-[600px]:py-1 min-[600px]:text-xs">{isForexMode ? "Forex" : mode === "auto" ? "Bot" : "Spot"}</span>
                   </div>
-                  <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-gray-400 min-[600px]:mt-2 min-[600px]:gap-3 min-[600px]:text-sm">
+                  <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[10px] text-gray-400 min-[600px]:mt-2 min-[600px]:gap-3 min-[600px]:text-sm">
                     <span>Price <span className="font-black text-white">{formatActivePrice(tick?.price)}</span></span>
                     {!isForexMode && <span>Digit <span className="font-black text-brand">{tick?.lastDigit ?? "-"}</span></span>}
                     <span className={movement >= 0 ? "text-emerald-400" : "text-rose-400"}>{movement >= 0 ? "+" : ""}{movement.toFixed(2)}</span>
@@ -1270,18 +1298,18 @@ export function TradeApp() {
                   </div>
                 </div>
                 <label className="relative block min-w-0">
-                  <select value={asset} onChange={(event) => switchAsset(event.target.value)} className="field h-10 min-w-0 py-2 text-xs font-black min-[600px]:h-12 min-[600px]:py-3 min-[600px]:text-sm">
+                  <select value={asset} onChange={(event) => switchAsset(event.target.value)} className="field h-8 min-w-0 py-1 text-xs font-black min-[600px]:h-12 min-[600px]:py-3 min-[600px]:text-sm">
                     {selectableAssets.map((item) => <option key={item} value={item}>{assetLabel(item)}</option>)}
                   </select>
                 </label>
               </div>
-              <div className="mt-2 flex max-w-full gap-1 overflow-x-auto rounded-lg bg-white/5 p-1 min-[600px]:mt-3 min-[600px]:overflow-hidden">
+              <div className="mt-1.5 flex max-w-full gap-1 overflow-x-auto rounded-lg bg-white/5 p-0.5 min-[600px]:mt-3 min-[600px]:p-1 min-[600px]:overflow-hidden">
                   {chartTimeframes.map((timeframe) => (
                     <button
                       key={timeframe}
                       aria-pressed={activeTimeframe === timeframe}
                       onClick={() => selectTimeframe(timeframe)}
-                      className={`min-h-9 min-w-10 rounded-md px-2 py-1 text-[11px] font-bold min-[600px]:flex-1 min-[600px]:px-1.5 min-[600px]:py-1.5 ${activeTimeframe === timeframe ? "bg-brand !text-ink" : "text-gray-300 hover:bg-white/5"}`}
+                      className={`min-h-7 min-w-9 rounded-md px-1.5 py-0.5 text-[10px] font-bold min-[600px]:min-h-9 min-[600px]:min-w-10 min-[600px]:flex-1 min-[600px]:px-1.5 min-[600px]:py-1.5 min-[600px]:text-[11px] ${activeTimeframe === timeframe ? "bg-brand !text-ink" : "text-gray-300 hover:bg-white/5"}`}
                     >
                       {timeframe}
                     </button>
@@ -1289,7 +1317,7 @@ export function TradeApp() {
               </div>
             </div>
 
-            <div className="relative h-[200px] min-h-[190px] bg-[#0a0e14] sm:h-[260px] min-[900px]:h-auto min-[900px]:min-h-0 min-[900px]:flex-1 xl:min-h-[420px]">
+            <div className="relative h-[160px] min-h-[140px] bg-[#0a0e14] min-[500px]:h-[190px] sm:h-[220px] min-[900px]:h-auto min-[900px]:min-h-0 min-[900px]:flex-1 xl:min-h-[420px]">
               <svg viewBox="0 0 640 300" preserveAspectRatio="none" className="absolute inset-0 h-full w-full">
                 <defs>
                   <linearGradient id="trade-chart" x1="0" x2="0" y1="0" y2="1"><stop stopColor="#FACC15" stopOpacity=".26" /><stop offset="1" stopColor="#FACC15" stopOpacity="0" /></linearGradient>
@@ -1326,7 +1354,7 @@ export function TradeApp() {
             </div>
           </div>
           {!isForexMode && (
-            <div>
+            <div className="hidden min-[500px]:block min-[900px]:block">
               <DigitPanel tick={tick} selectedDigit={selectedDigit} digitStats={digitStats} digitMeasures={digitMeasures} />
             </div>
           )}
@@ -1361,7 +1389,7 @@ export function TradeApp() {
         <aside className="order-2 min-w-0 space-y-2 min-[900px]:order-3 min-[900px]:flex min-[900px]:h-full min-[900px]:space-y-0 min-[900px]:self-stretch min-[900px]:overflow-hidden xl:col-start-3 xl:row-start-1">
           <div className="flex min-h-0 w-full flex-col rounded-lg border border-white/10 bg-[#0f141d] text-white shadow-xl shadow-black/20 min-[900px]:h-full">
             <div className="hidden grid-cols-[minmax(0,1fr)_auto_auto_auto] items-center gap-1.5 border-b border-white/10 p-1 min-[900px]:grid min-[900px]:p-2">
-              <button onClick={() => switchAccount(false)} className="flex min-w-0 items-center gap-1.5 rounded-xl border border-white/10 bg-white/5 p-1 text-left shadow-sm">
+              <button onClick={() => switchAccount(!user.is_demo)} className="flex min-w-0 items-center gap-1.5 rounded-xl border border-white/10 bg-white/5 p-1 text-left shadow-sm">
                 <span className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-brand text-sm font-black text-ink">{user.is_demo ? "D" : "R"}</span>
                 <span className="min-w-0">
                   <span className="block truncate text-base font-black text-brand">${Number(user.active_balance).toFixed(2)}</span>
@@ -1373,7 +1401,7 @@ export function TradeApp() {
               <button aria-label="Open profile" onClick={() => { location.href = "/settings"; }} className="grid h-9 w-9 place-items-center rounded-full border border-white/10 bg-white/5 text-gray-300 hover:bg-white/10"><CircleUserRound size={19} /></button>
             </div>
 
-            <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-visible p-1.5 sm:p-2 min-[900px]:overflow-hidden min-[900px]:p-2">
+            <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-visible p-1 sm:gap-1 sm:p-1.5 min-[900px]:gap-1 min-[900px]:overflow-hidden min-[900px]:p-2">
               <div className="hidden min-[900px]:block">
                 <div className="mb-1 flex items-center justify-between gap-3">
                   <h2 className="text-xs font-black uppercase tracking-wide text-gray-400">Mode</h2>
@@ -1409,22 +1437,22 @@ export function TradeApp() {
                 </div>
               )}
 
-              <div className="grid grid-cols-2 gap-1.5 min-[900px]:hidden">
+              <div className="grid grid-cols-2 gap-1 min-[900px]:hidden">
                 <button
                   type="button"
                   onClick={() => setMobilePanel("trade")}
-                  className="min-h-11 min-w-0 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-left hover:bg-white/10"
+                  className="min-h-9 min-w-0 rounded-xl border border-white/10 bg-white/5 px-2 py-1.5 text-left hover:bg-white/10"
                 >
-                  <span className="block text-[10px] font-black uppercase tracking-wide text-gray-500">Trade mode</span>
-                  <span className="mt-0.5 block truncate text-xs font-black text-white">{tradeModeSummary}</span>
+                  <span className="block text-[9px] font-black uppercase tracking-wide text-gray-500">Trade mode</span>
+                  <span className="mt-0.5 block truncate text-[10px] font-black text-white">{tradeModeSummary}</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => setMobilePanel("positions")}
-                  className="min-h-11 min-w-0 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-left hover:bg-white/10"
+                  className="min-h-9 min-w-0 rounded-xl border border-white/10 bg-white/5 px-2 py-1.5 text-left hover:bg-white/10"
                 >
-                  <span className="block text-[10px] font-black uppercase tracking-wide text-gray-500">Positions</span>
-                  <span className="mt-0.5 block truncate text-xs font-black text-white">{positionsSummary}</span>
+                  <span className="block text-[9px] font-black uppercase tracking-wide text-gray-500">Positions</span>
+                  <span className="mt-0.5 block truncate text-[10px] font-black text-white">{positionsSummary}</span>
                 </button>
               </div>
 
@@ -1503,8 +1531,8 @@ export function TradeApp() {
               </details>
 
               <div>
-                <div className="mb-1 flex items-center justify-between gap-3">
-                  <h3 className="text-xs font-black uppercase tracking-wide text-gray-400">{isForexMode ? "Margin" : "Stake"}</h3>
+                <div className="mb-0.5 flex items-center justify-between gap-3">
+                  <h3 className="text-[10px] font-black uppercase tracking-wide text-gray-400 min-[600px]:text-xs">{isForexMode ? "Margin" : "Stake"}</h3>
                   {!isForexMode && (
                     <div className="hidden grid-cols-2 overflow-hidden rounded-lg border border-white/10 bg-white/5 text-xs font-black min-[900px]:grid">
                       <button onClick={() => setAmountMode("stake")} className={`min-h-9 px-2.5 py-1 ${amountMode === "stake" ? "bg-brand text-ink" : "text-gray-400"}`}>Stake</button>
@@ -1513,12 +1541,12 @@ export function TradeApp() {
                   )}
                 </div>
 
-                <div className="grid grid-cols-[40px_1fr_40px] items-center rounded-xl border border-white/10 bg-[#0b0f16] p-0.5 min-[600px]:rounded-2xl min-[600px]:p-1 min-[900px]:grid-cols-[36px_1fr_36px]">
-                  <button aria-label="Decrease amount" onClick={() => adjustTicketAmount(-1)} className="grid h-10 place-items-center rounded-xl text-brand min-[900px]:h-9"><Minus size={21} /></button>
-                  <label className="flex items-center justify-center gap-2 text-center">
-                    <span className="text-lg font-black text-brand">$</span>
+                <div className="grid grid-cols-[36px_1fr_36px] items-center rounded-xl border border-white/10 bg-[#0b0f16] p-0.5 min-[600px]:grid-cols-[40px_1fr_40px] min-[600px]:rounded-2xl min-[600px]:p-1 min-[900px]:grid-cols-[36px_1fr_36px]">
+                  <button aria-label="Decrease amount" onClick={() => adjustTicketAmount(-1)} className="grid h-8 place-items-center rounded-xl text-brand min-[600px]:h-10 min-[900px]:h-9"><Minus size={18} /></button>
+                  <label className="flex items-center justify-center gap-1.5 text-center">
+                    <span className="text-base font-black text-brand min-[600px]:text-lg">$</span>
                     <input
-                      className="h-10 w-20 bg-transparent text-center text-lg font-black leading-none text-white outline-none min-[600px]:text-xl min-[900px]:h-9 min-[900px]:w-24"
+                      className="h-8 w-16 bg-transparent text-center text-base font-black leading-none text-white outline-none min-[600px]:h-10 min-[600px]:w-20 min-[600px]:text-xl min-[900px]:h-9 min-[900px]:w-24"
                       type="number"
                       min="0.1"
                       step="0.1"
@@ -1527,20 +1555,20 @@ export function TradeApp() {
                       aria-label={isForexMode ? "Margin amount" : amountMode === "stake" ? "Stake amount" : "Payout amount"}
                     />
                   </label>
-                  <button aria-label="Increase amount" onClick={() => adjustTicketAmount(1)} className="grid h-10 place-items-center rounded-xl text-brand min-[900px]:h-9"><Plus size={21} /></button>
+                  <button aria-label="Increase amount" onClick={() => adjustTicketAmount(1)} className="grid h-8 place-items-center rounded-xl text-brand min-[600px]:h-10 min-[900px]:h-9"><Plus size={18} /></button>
                 </div>
 
                 {mode === "manual" && (
                   <>
-                    <div className="mt-1.5 hidden grid-cols-6 gap-1 min-[900px]:grid">
+                    <div className="mt-1 hidden grid-cols-6 gap-1 min-[900px]:grid">
                       {quickStakeAmounts.map((amount) => (
                         <button key={amount} type="button" onClick={() => { setAmountMode("stake"); setStake(amount); }} className={`min-h-9 rounded-lg border text-[11px] font-black ${stake === amount ? "border-brand bg-brand/15 text-brand" : "border-white/10 bg-white/5 text-gray-400 hover:bg-white/10 hover:text-white"}`}>${amount}</button>
                       ))}
                     </div>
 
-                    <div className="mt-1.5 flex items-center justify-between rounded-xl border border-white/10 bg-white/5 px-3 py-1 min-[600px]:py-1.5">
-                      <span className="text-xs font-black text-gray-400">{isForexMode ? "Return" : "Payout"}</span>
-                      <span className="text-base font-black text-white min-[600px]:text-lg">${primaryPayout.toFixed(2)} <span className="text-[10px] font-black text-gray-500">USD</span></span>
+                    <div className="mt-1 flex items-center justify-between rounded-xl border border-white/10 bg-white/5 px-2 py-0.5 min-[600px]:px-3 min-[600px]:py-1">
+                      <span className="text-[10px] font-black text-gray-400 min-[600px]:text-xs">{isForexMode ? "Return" : "Payout"}</span>
+                      <span className="text-sm font-black text-white min-[600px]:text-lg">${primaryPayout.toFixed(2)} <span className="text-[10px] font-black text-gray-500">USD</span></span>
                     </div>
                   </>
                 )}
@@ -1594,8 +1622,8 @@ export function TradeApp() {
               )}
 
               {isForexMode ? (
-                <div className="mt-auto grid gap-1.5 border-t border-white/10 pt-1.5">
-                  <div className="grid grid-cols-2 gap-1.5">
+                <div className="mt-auto grid gap-1 border-t border-white/10 pt-1">
+                  <div className="grid grid-cols-2 gap-1">
                     {([
                       { direction: "over" as Direction, label: "Buy", icon: ArrowUp, tone: "emerald" as const },
                       { direction: "under" as Direction, label: "Sell", icon: ArrowDown, tone: "rose" as const },
@@ -1608,21 +1636,21 @@ export function TradeApp() {
                           key={action.direction}
                           disabled={isTradeButtonDisabled(action.direction)}
                           onClick={() => place(action.direction)}
-                          className={`min-h-10 rounded-xl border p-1.5 text-left font-black text-white disabled:cursor-not-allowed disabled:opacity-50 min-[600px]:min-h-12 min-[600px]:rounded-2xl min-[600px]:p-2 ${isBuy ? "border-emerald-400/35 bg-emerald-400/10" : "border-rose-400/35 bg-rose-400/10"}`}
+                          className={`min-h-9 rounded-xl border p-1 text-left font-black text-white disabled:cursor-not-allowed disabled:opacity-50 min-[600px]:min-h-12 min-[600px]:rounded-2xl min-[600px]:p-2 ${isBuy ? "border-emerald-400/35 bg-emerald-400/10" : "border-rose-400/35 bg-rose-400/10"}`}
                         >
-                          <span className="mb-1 flex items-center gap-2 text-sm">
-                            <Icon className={isBuy ? "text-emerald-400" : "text-rose-400"} size={18} />
+                          <span className="mb-0.5 flex items-center gap-1.5 text-xs min-[600px]:text-sm">
+                            <Icon className={isBuy ? "text-emerald-400" : "text-rose-400"} size={15} />
                             <span>{label}</span>
                           </span>
-                          <span className="block text-right text-[11px] text-gray-400">${forexQuote.notional.toFixed(2)}</span>
-                          <span className="block text-right text-[11px] text-gray-400">+${forexProfit.toFixed(2)}</span>
+                          <span className="block text-right text-[10px] text-gray-400">${forexQuote.notional.toFixed(2)}</span>
+                          <span className="block text-right text-[10px] text-gray-400">+${forexProfit.toFixed(2)}</span>
                         </button>
                       );
                     })}
                   </div>
                 </div>
               ) : (
-                <div className="mt-auto grid grid-cols-2 gap-1.5 border-t border-white/10 pt-1.5 min-[900px]:grid-cols-1">
+                <div className="mt-auto grid grid-cols-2 gap-1 border-t border-white/10 pt-1 min-[900px]:grid-cols-1">
                   {contractActions.map((action) => {
                     const Icon = action.icon;
                     const profitPercent = stake > 0 ? ((action.payout / stake - 1) * 100).toFixed(2) : "0.00";
@@ -1633,13 +1661,13 @@ export function TradeApp() {
                         key={action.direction}
                         disabled={isTradeButtonDisabled(action.direction, action.disabled)}
                         onClick={() => place(action.direction)}
-                        className={`grid min-h-14 grid-cols-[24px_1fr] items-center gap-1 rounded-xl border p-1.5 text-left disabled:cursor-not-allowed disabled:opacity-50 min-[600px]:min-h-11 min-[600px]:grid-cols-[34px_1fr_auto] min-[600px]:gap-2 min-[600px]:p-1.5 ${isGreen ? "border-emerald-400/35 bg-emerald-400/10 text-emerald-400" : "border-rose-400/35 bg-rose-400/10 text-rose-400"}`}
+                        className={`grid min-h-10 grid-cols-[22px_1fr] items-center gap-1 rounded-xl border p-1 text-left disabled:cursor-not-allowed disabled:opacity-50 min-[600px]:min-h-11 min-[600px]:grid-cols-[34px_1fr_auto] min-[600px]:gap-2 min-[600px]:p-1.5 ${isGreen ? "border-emerald-400/35 bg-emerald-400/10 text-emerald-400" : "border-rose-400/35 bg-rose-400/10 text-rose-400"}`}
                       >
-                        <span className={`grid h-6 w-6 place-items-center rounded-lg min-[600px]:h-8 min-[600px]:w-8 ${isGreen ? "bg-emerald-400/15" : "bg-rose-400/15"}`}><Icon size={17} /></span>
-                        <span className="truncate text-xs font-black text-white min-[600px]:text-sm">{actionLabel}</span>
-                        <span className="col-span-2 flex items-center justify-between gap-2 text-right min-[600px]:col-auto min-[600px]:block">
-                          <span className="block text-[10px] font-black text-gray-300 min-[600px]:text-[11px]">${action.payout.toFixed(2)} USD</span>
-                          <span className={`block text-[11px] font-black min-[600px]:text-xs ${isGreen ? "text-emerald-500" : "text-rose-500"}`}>{profitPercent}%</span>
+                        <span className={`grid h-5 w-5 place-items-center rounded-lg min-[600px]:h-8 min-[600px]:w-8 ${isGreen ? "bg-emerald-400/15" : "bg-rose-400/15"}`}><Icon size={14} /></span>
+                        <span className="truncate text-[10px] font-black text-white min-[600px]:text-sm">{actionLabel}</span>
+                        <span className="col-span-2 flex items-center justify-between gap-1 text-right min-[600px]:col-auto min-[600px]:block">
+                          <span className="block text-[9px] font-black text-gray-300 min-[600px]:text-[11px]">${action.payout.toFixed(2)} USD</span>
+                          <span className={`block text-[10px] font-black min-[600px]:text-xs ${isGreen ? "text-emerald-500" : "text-rose-500"}`}>{profitPercent}%</span>
                         </span>
                       </button>
                     );

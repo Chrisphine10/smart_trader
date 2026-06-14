@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { config } from "../lib/config";
-import { db, hashPassword, migrate, referralCode, seedAdmin, trc20Address, verifyPassword, type User } from "../lib/db";
+import { db, hashPassword, migrate, publicUser, referralCode, seedAdmin, trc20Address, verifyPassword, type User } from "../lib/db";
 import { market } from "../lib/market";
 import { calculateEscrowSplit, createManualTrade, maybeCreateAutoTrade, settleOpenPositions, startAutoSession } from "../lib/repositories";
 import { assets, chooseSmartDigitContract, forexAssets, isForexAsset, payoutMultiplier, potentialPayout, pricePrecisionForAsset, resolveDigitTrade, type Direction } from "../lib/trading";
@@ -36,6 +36,19 @@ describe("trading math", () => {
 
     const fresh = db.prepare("SELECT * FROM admins WHERE id = ?").get(admin.id) as { password_hash: string };
     expect(verifyPassword(config.adminPassword, fresh.password_hash)).toBe(true);
+  });
+
+  it("marks generated demo sessions without treating registered demo mode as temporary", () => {
+    const registered = createTradingUser("registered-demo-mode");
+    db.prepare("UPDATE users SET is_demo = 1, balance = demo_balance WHERE id = ?").run(registered.id);
+    const registeredDemoMode = db.prepare("SELECT * FROM users WHERE id = ?").get(registered.id) as User;
+
+    const temporaryDemo = createDemoTradingUser("temporary-demo");
+    db.prepare("UPDATE users SET email = ?, username = 'Demo Trader' WHERE id = ?").run(`demo-${temporaryDemo.id}@tagoption.local`, temporaryDemo.id);
+    const temporaryDemoSession = db.prepare("SELECT * FROM users WHERE id = ?").get(temporaryDemo.id) as User;
+
+    expect((publicUser(registeredDemoMode) as Record<string, unknown>).is_temporary_demo).toBe(false);
+    expect((publicUser(temporaryDemoSession) as Record<string, unknown>).is_temporary_demo).toBe(true);
   });
 
   it("calculates over and under payouts from selected digit", () => {

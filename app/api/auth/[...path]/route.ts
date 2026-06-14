@@ -1,6 +1,6 @@
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { type NextRequest } from "next/server";
-import { db, getUserByEmail, getUserById, hashPassword, money, publicUser, referralCode, requireUserFromHeader, signToken, trc20Address, verifyPassword } from "../../../../lib/db";
+import { db, getUserByEmail, getUserById, hashPassword, isTemporaryDemoUser, money, publicUser, referralCode, requireUserFromHeader, signToken, trc20Address, verifyPassword } from "../../../../lib/db";
 import { error, handleRoute, json, rateLimit, readBody } from "../../../../lib/http";
 import { initiateCardDeposit, initiateMpesaDeposit, initiatePaystackDeposit } from "../../../../lib/payments";
 import { confirmProviderDeposit, ensureCryptoAddress, getAppSetting, getCryptoNetwork, listCryptoNetworks, listUserCryptoAddresses, recordManualCryptoDeposit } from "../../../../lib/repositories";
@@ -100,6 +100,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ pa
     if (path === "switch-account") {
       const user = requireUserFromHeader(request.headers.get("authorization"));
       const mode = String(body.mode ?? "demo") === "demo";
+      if (!mode && isTemporaryDemoUser(user)) return error("Log in to open real account mode", 401);
       db.prepare("UPDATE users SET is_demo = ?, balance = ? WHERE id = ?").run(mode ? 1 : 0, mode ? user.demo_balance : user.real_balance, user.id);
       const fresh = getUserById(user.id)!;
       return json({ user: publicUser(fresh), token: signToken({ id: fresh.id, email: fresh.email, username: fresh.username, kind: "user" }) });

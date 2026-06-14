@@ -586,8 +586,13 @@ export function verifyToken<T extends Record<string, unknown>>(token: string | n
   return payload;
 }
 
+export function isTemporaryDemoUser(user: User) {
+  return Boolean(user.is_demo) && user.email.startsWith("demo-") && user.email.endsWith("@tagoption.local") && user.username === "Demo Trader";
+}
+
 export function publicUser(user: User) {
   const active = user.is_demo ? user.demo_balance : user.real_balance;
+  const isTemporaryDemo = isTemporaryDemoUser(user);
   return {
     id: user.id,
     email: user.email,
@@ -603,6 +608,7 @@ export function publicUser(user: User) {
     active_balance: active,
     referral_code: user.referral_code,
     kyc_status: user.kyc_status ?? "unverified",
+    is_temporary_demo: isTemporaryDemo,
   };
 }
 
